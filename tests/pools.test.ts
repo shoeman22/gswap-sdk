@@ -126,6 +126,64 @@ describe('Pools', () => {
     const invalidRowError = await invalidRow.getPools().catch((caught: unknown) => caught);
     expect((invalidRowError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
 
+    const listRow = {
+      contractVersion: 'v2' as const,
+      token0: 'A',
+      token1: 'B',
+      token0CompositeKey: 'A$Unit$none$none',
+      token1CompositeKey: 'B$Unit$none$none',
+      fee: 3000,
+      poolName: 'A/B',
+      poolRef: 'A$B$3000',
+      tickSpacing: 60,
+      protocolFees: 3,
+      tradingFees: 3000,
+      creator: 'client|owner',
+      price: '1',
+      sqrtPrice: '1',
+      tick: 0,
+      token0Tvl: '100',
+      token1Tvl: '100',
+      tvlUsd: 100,
+      volume1d: 10,
+      volume7d: 20,
+      volume30d: 30,
+      trades1d: 1,
+      fee24h: 0.03,
+      apr1d: 0.1,
+      token0Price: 1,
+      token1Price: 1,
+    };
+    const fullRow = new Pools(
+      gateway(async () => response({ data: [listRow] })),
+      symbols(),
+    );
+    expect((await fullRow.getPools())[0]).to.deep.equal(listRow);
+    const invalidStringField = new Pools(
+      gateway(async () => response({ data: [{ ...listRow, price: 1 }] })),
+      symbols(),
+    );
+    const invalidStringFieldError = await invalidStringField
+      .getPools()
+      .catch((caught: unknown) => caught);
+    expect((invalidStringFieldError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+    const invalidNumberField = new Pools(
+      gateway(async () => response({ data: [{ ...listRow, tvlUsd: 'bad' }] })),
+      symbols(),
+    );
+    const invalidNumberFieldError = await invalidNumberField
+      .getPools()
+      .catch((caught: unknown) => caught);
+    expect((invalidNumberFieldError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+    const invalidPrimitiveRow = new Pools(
+      gateway(async () => response({ data: [null] })),
+      symbols(),
+    );
+    const invalidPrimitiveRowError = await invalidPrimitiveRow
+      .getPools()
+      .catch((caught: unknown) => caught);
+    expect((invalidPrimitiveRowError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+
     const timedGateway = new ChainGateway({
       dexBackendBaseUrl: BASE,
       httpRequestor: async () => response({ data: [] }),
