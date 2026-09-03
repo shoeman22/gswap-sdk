@@ -119,30 +119,87 @@ export class Quoting {
   }
 }
 
-function mapQuote(wire: QuoteWire): QuoteResult {
+function mapQuote(value: unknown): QuoteResult {
+  if (!isQuoteWire(value)) {
+    throw new GSwapSDKError('Backend returned an invalid quote.', 'INVALID_CHAIN_RESPONSE', {
+      data: value,
+    });
+  }
+  const wire = value;
   const currentPrice =
     wire.currentPrice !== undefined
       ? new BigNumber(wire.currentPrice)
-      : orientPrice(wire.currentSqrtPrice, wire.tokenInIsToken0);
+      : orientPrice(wire.currentSqrtPrice!, wire.tokenInIsToken0);
   const newPrice =
     wire.newPrice !== undefined
       ? new BigNumber(wire.newPrice)
-      : orientPrice(wire.newSqrtPrice, wire.tokenInIsToken0);
+      : orientPrice(wire.newSqrtPrice!, wire.tokenInIsToken0);
   const priceImpact = newPrice.minus(currentPrice).dividedBy(currentPrice);
 
   return {
-    ...wire,
+    contractVersion: wire.contractVersion,
+    fee: wire.fee,
+    amountIn: wire.amountIn,
+    amountOut: wire.amountOut,
+    ...(wire.currentSqrtPrice === undefined ? {} : { currentSqrtPrice: wire.currentSqrtPrice }),
+    ...(wire.newSqrtPrice === undefined ? {} : { newSqrtPrice: wire.newSqrtPrice }),
     feeTier: wire.fee,
+    newTick: wire.newTick,
+    tradingFees: wire.tradingFees,
+    protocolFees: wire.protocolFees,
+    totalFees: wire.totalFees,
+    feeTokenSymbol: wire.feeTokenSymbol,
+    token0Symbol: wire.token0Symbol,
+    token1Symbol: wire.token1Symbol,
+    tokenInIsToken0: wire.tokenInIsToken0,
     currentPrice,
     newPrice,
     priceImpact,
-  } as QuoteResult;
+  };
 }
 
-function orientPrice(sqrtPrice: string | undefined, tokenInIsToken0: boolean): BigNumber {
-  if (sqrtPrice === undefined) return new BigNumber(NaN);
+function orientPrice(sqrtPrice: string, tokenInIsToken0: boolean): BigNumber {
   const poolPrice = new BigNumber(sqrtPrice).pow(2);
   return tokenInIsToken0 ? poolPrice : new BigNumber(1).dividedBy(poolPrice);
+}
+
+function isQuoteWire(value: unknown): value is QuoteWire {
+  if (typeof value !== 'object' || value === null) return false;
+  const wire = value as Record<string, unknown>;
+  const requiredStrings = [
+    'amountIn',
+    'amountOut',
+    'tradingFees',
+    'protocolFees',
+    'totalFees',
+    'feeTokenSymbol',
+    'token0Symbol',
+    'token1Symbol',
+  ];
+  return (
+    wire['contractVersion'] === 'v2' &&
+    typeof wire['fee'] === 'number' &&
+    Number.isFinite(wire['fee']) &&
+    requiredStrings.every((key) => typeof wire[key] === 'string') &&
+    typeof wire['newTick'] === 'number' &&
+    Number.isInteger(wire['newTick']) &&
+    typeof wire['tokenInIsToken0'] === 'boolean' &&
+    optionalPositiveDecimal(wire['currentSqrtPrice']) &&
+    optionalPositiveDecimal(wire['newSqrtPrice']) &&
+    optionalPositiveDecimal(wire['currentPrice']) &&
+    optionalPositiveDecimal(wire['newPrice']) &&
+    (wire['currentSqrtPrice'] !== undefined || wire['currentPrice'] !== undefined) &&
+    (wire['newSqrtPrice'] !== undefined || wire['newPrice'] !== undefined)
+  );
+}
+
+function optionalPositiveDecimal(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === 'string' &&
+      new BigNumber(value).isFinite() &&
+      new BigNumber(value).isGreaterThan(0))
+  );
 }
 
 function mapQuoteError(

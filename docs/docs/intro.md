@@ -16,9 +16,9 @@ The public surface is grouped by responsibility:
 - `gSwap.positions` reads positions and submits liquidity operations.
 - `gSwap.assets` reads user balances; `gSwap.symbols` resolves symbols.
 
-All writes go directly through the Chain Gateway. The SDK signs the DTO,
-posts it to the method-specific gateway route, and returns a
-`SubmittedTransaction` after the synchronous chain response. There is no
+All reads and writes go through the configured swap backend. The SDK signs the
+DTO, posts writes to the method-specific chain-gateway backend route, and returns
+a `SubmittedTransaction` after the synchronous chain response. There is no
 bundler, socket waiter, or EIP-712 write path.
 
 ```typescript

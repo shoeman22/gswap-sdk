@@ -22,7 +22,7 @@ import { validateFee, validateNumericAmount } from '../utils/validation.js';
 import { alignTickDown, alignTickUp, assertTickRange, tickFromPrice } from '../utils/ticks.js';
 
 type PositionGateway = Pick<ChainGateway, 'submit' | 'httpRequestor' | 'dexBackendBaseUrl'> & {
-  requestTimeoutMs?: number;
+  requestTimeoutMs?: number | undefined;
 };
 type PositionSymbols = Pick<Symbols, 'resolve' | 'orderPair'> & { invalidate?: () => void };
 
@@ -242,9 +242,9 @@ export class Positions {
     amount: NumericAmount;
     amountIsToken0: boolean;
   }) {
+    validateFee(args.fee);
     const pair = await this.symbols.orderPair(args.token0, args.token1);
     const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
-    validateFee(args.fee);
     assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee);
     validateNumericAmount(args.amount, 'amount');
     const amount = new BigNumber(args.amount).toFixed();
@@ -291,6 +291,7 @@ export class Positions {
     amount: NumericAmount;
     amountIsToken0: boolean;
   }) {
+    validateFee(args.fee);
     this.rejectNumber(args.minPrice, 'minPrice');
     this.rejectNumber(args.maxPrice, 'maxPrice');
     const minPrice = new BigNumber(args.minPrice);
@@ -343,12 +344,12 @@ export class Positions {
     fee: FEE_TIER;
     tickLower: number;
     tickUpper: number;
-    amount0?: NumericAmount;
-    amount1?: NumericAmount;
+    amount0?: NumericAmount | undefined;
+    amount1?: NumericAmount | undefined;
   }) {
+    validateFee(args.fee);
     const pair = await this.symbols.orderPair(args.token0, args.token1);
     const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
-    validateFee(args.fee);
     assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee);
     if (args.amount0 !== undefined && args.amount1 !== undefined) {
       throw new GSwapSDKError('Provide at most one of amount0 or amount1.', 'VALIDATION_ERROR');
@@ -403,9 +404,9 @@ export class Positions {
     tickLower: number;
     tickUpper: number;
   }) {
+    validateFee(args.fee);
     const pair = await this.symbols.orderPair(args.token0, args.token1);
     const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
-    validateFee(args.fee);
     assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee);
     const dto: CollectPositionFeesDTO = {
       token0: pair.token0.symbol,
@@ -442,10 +443,10 @@ export class Positions {
     token0: TokenRef;
     token1: TokenRef;
     fee: FEE_TIER;
-    startingPrice?: NumericAmount;
-    startingSqrtPrice?: NumericAmount;
-    isPrivate?: boolean;
-    privateAccess?: string[];
+    startingPrice?: NumericAmount | undefined;
+    startingSqrtPrice?: NumericAmount | undefined;
+    isPrivate?: boolean | undefined;
+    privateAccess?: string[] | undefined;
   }) {
     const hasPrice = args.startingPrice !== undefined;
     const hasSqrtPrice = args.startingSqrtPrice !== undefined;
@@ -600,7 +601,7 @@ export class Positions {
   }
 
   private uniqueKey(): string {
-    return `gswap-sdk-${crypto.randomUUID()}`;
+    return `gswap-sdk-${globalThis.crypto.randomUUID()}`;
   }
 
   private async resolveCreateToken(ref: TokenRef): Promise<ResolvedCreateToken> {

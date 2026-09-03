@@ -87,6 +87,21 @@ describe('signers', () => {
         .signObject('Trade', dto)
         .catch((error: unknown) => error);
       expect(invalid).to.have.property('code', 'INVALID_SIGNATURE');
+
+      installGalaWallet(async () => 'z'.repeat(130));
+      const malformed = await new GalaWalletSigner(walletAddress)
+        .signObject('Trade', dto)
+        .catch((error: unknown) => error);
+      expect(malformed).to.have.property('code', 'INVALID_SIGNATURE');
+
+      installGalaWallet(async () => {
+        const nonError: unknown = {};
+        throw nonError;
+      });
+      const unexpectedResult = await new GalaWalletSigner(walletAddress)
+        .signObject('Trade', dto)
+        .catch((error: unknown) => error);
+      expect(unexpectedResult).to.deep.equal({});
     });
 
     it('recognizes non-Error unsupported-scheme responses before fallback', async () => {

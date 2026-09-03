@@ -8,6 +8,7 @@ export class SubmittedTransaction<TConfirmation = IndexedTransaction | Position 
   public readonly method: string;
   public readonly uniqueKey: string;
   public readonly transactionId: string | null;
+  public readonly blockNumber: number | null;
   public readonly mode = 'sync' as const;
   public readonly result: unknown;
   private readonly backendBaseUrl: string;
@@ -25,12 +26,14 @@ export class SubmittedTransaction<TConfirmation = IndexedTransaction | Position 
     result: unknown;
     dexBackendBaseUrl: string;
     httpRequestor: HttpRequestor;
-    requestTimeoutMs?: number;
-    positionConfirmation?: (signal: AbortSignal) => Promise<Position | null>;
+    blockNumber?: number | null | undefined;
+    requestTimeoutMs?: number | undefined;
+    positionConfirmation?: ((signal: AbortSignal) => Promise<Position | null>) | undefined;
   }) {
     this.method = options.method;
     this.uniqueKey = options.uniqueKey;
     this.transactionId = options.transactionId;
+    this.blockNumber = options.blockNumber ?? null;
     this.result = options.result;
     this.backendBaseUrl = options.dexBackendBaseUrl.replace(/\/$/u, '');
     this.requestor = options.httpRequestor;
@@ -45,10 +48,7 @@ export class SubmittedTransaction<TConfirmation = IndexedTransaction | Position 
    * const indexed = await submitted.confirm({ timeoutMs: 60_000 });
    * ```
    */
-  public async confirm(options?: {
-    timeoutMs?: number;
-    pollIntervalMs?: number;
-  }): Promise<TConfirmation> {
+  public async confirm(options?: ConfirmOptions): Promise<TConfirmation> {
     if (this.method !== 'Trade') return this.confirmPosition(options) as Promise<TConfirmation>;
     const timeoutMs = options?.timeoutMs ?? 60_000;
     const pollIntervalMs = Math.max(500, options?.pollIntervalMs ?? 2_500);
@@ -77,6 +77,14 @@ export class SubmittedTransaction<TConfirmation = IndexedTransaction | Position 
         return { ...data, uniqueKey: this.uniqueKey } as TConfirmation;
       }
 
+      if (
+        this.transactionId !== null &&
+        this.blockNumber !== null &&
+        isPendingExploreResponse(response.status, body)
+      ) {
+        return null as TConfirmation;
+      }
+
       const retryAfter = response.status === 429 ? readRetryAfter(response) : undefined;
       if (retryAfter !== undefined) {
         const waitMs = retryAfter;
@@ -101,10 +109,7 @@ export class SubmittedTransaction<TConfirmation = IndexedTransaction | Position 
     throw GSwapSDKError.confirmationTimeoutError(this.uniqueKey);
   }
 
-  private async confirmPosition(options?: {
-    timeoutMs?: number;
-    pollIntervalMs?: number;
-  }): Promise<Position | null> {
+  private async confirmPosition(options?: ConfirmOptions): Promise<Position | null> {
     if (this.positionConfirmation === undefined) return null;
     const timeoutMs = options?.timeoutMs ?? 60_000;
     const pollIntervalMs = Math.max(500, options?.pollIntervalMs ?? 2_500);
@@ -126,6 +131,12 @@ export class SubmittedTransaction<TConfirmation = IndexedTransaction | Position 
     }
     throw GSwapSDKError.confirmationTimeoutError(this.uniqueKey);
   }
+}
+
+/** Controls timeout and polling behavior for indexed confirmation. */
+export interface ConfirmOptions {
+  timeoutMs?: number | undefined;
+  pollIntervalMs?: number | undefined;
 }
 
 function bodyMessage(body: unknown): string {

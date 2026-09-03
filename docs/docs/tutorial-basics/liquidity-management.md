@@ -97,9 +97,11 @@ const tx = await gSwap.positions.createPool({
   fee: 3000,
   startingPrice: '0.03',
 });
-await tx.confirm();
+console.log(tx.transactionId ?? tx.uniqueKey);
 ```
 
 CreatePool is not organization-gated. Treat symbols as a global namespace and
 choose them carefully; the first successful pool can register them
-permanently. A duplicate pool is rejected by the gateway or chain.
+permanently. CreatePool has no affected position to re-read, so its
+`confirm()` result is `null`; use the synchronous result and transaction
+metadata above. A duplicate pool is rejected by the gateway or chain.

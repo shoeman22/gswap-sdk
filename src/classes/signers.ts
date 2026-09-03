@@ -2,6 +2,9 @@ import { serialize, signatures } from '@gala-chain/api';
 import { calculatePersonalSignPrefix } from '@gala-chain/connect';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 
+// Keep the GalaChain 2.x serializer: the 3.x prefix treatment is incompatible
+// with the personal-sign payload contract used by the v2 gateway.
+
 /** The signing schemes supported by the Gala Wallet signer. */
 export type GalaWalletScheme = 'native' | 'personal-sign';
 
@@ -171,7 +174,8 @@ export class PrivateKeySigner implements GalaChainSigner {
  * automatic fallback for older wallets.
  *
  * The selected Ethereum account is passed to Gala Wallet. Personal-sign resolves the bare
- * `eth|` identity; the legacy EIP-712 `eth_signTypedData` path is not used.
+ * `eth|` identity; the legacy EIP-712 `eth_signTypedData` path is not used. The fallback calls
+ * `gala_signChainDto([serialize({ ...dto, prefix }), walletAddress, methodName])`.
  */
 export class GalaWalletSigner implements GalaChainSigner {
   /** The wallet address supplied to Gala Wallet for each signing request. */
@@ -193,7 +197,7 @@ export class GalaWalletSigner implements GalaChainSigner {
    * `eth|0x...` form is also accepted and normalized.
    * @param options - Select native signing or personal-sign explicitly.
    */
-  constructor(walletAddress: string, options: { scheme?: GalaWalletScheme } = {}) {
+  constructor(walletAddress: string, options: { scheme?: GalaWalletScheme | undefined } = {}) {
     this.walletAddress = normalizeEthereumAccount(walletAddress, true);
     this.effectiveScheme = options.scheme ?? 'native';
   }

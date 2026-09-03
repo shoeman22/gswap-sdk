@@ -2,6 +2,7 @@ import type { HttpRequestor } from '../types/http_requestor.js';
 import { debugLog } from '../utils/debug.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 import { readResponseBody, requestWithTimeout } from '../utils/transport.js';
+import { SDK_VERSION } from '../version.js';
 
 export class HttpClient {
   /** Create an HTTP client around fetch or an injected requestor. */
@@ -28,7 +29,7 @@ export class HttpClient {
         method,
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'GalaChain-SDK/0.0',
+          'User-Agent': `GalaChain-SDK/${SDK_VERSION}`,
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
         ...(options?.signal === undefined ? {} : { signal: options.signal }),

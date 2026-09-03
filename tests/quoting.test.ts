@@ -36,6 +36,7 @@ function service(body: unknown, status = 200): { quoting: Quoting; calls: string
   };
 }
 
+// Read-only fixture captured from stage /v2/trade/quote for GALA → GUSDC, amountIn=1.
 const quoteBody = {
   status: 200,
   message: 'Quote retrieved successfully',
@@ -43,14 +44,14 @@ const quoteBody = {
   data: {
     contractVersion: 'v2',
     fee: 3000,
-    amountIn: '100',
-    amountOut: '14.66774',
-    currentSqrtPrice: '0.383660743239253881267134064067944046127611966158491207207439',
-    newSqrtPrice: '0.383460560518272386840726362488655890753944357316864840199462',
-    newTick: -19172,
-    tradingFees: '0.27',
-    protocolFees: '0.03',
-    totalFees: '0.3',
+    amountIn: '1',
+    amountOut: '0.146929',
+    currentSqrtPrice: '0.38389094981864434168909857911577466442326166446596955946297',
+    newSqrtPrice: '0.383888944552596611561847272152223749351626388813453279508063',
+    newTick: -19149,
+    tradingFees: '0.0027',
+    protocolFees: '0.0003',
+    totalFees: '0.003',
     feeTokenSymbol: 'GALA',
     token0Symbol: 'GALA',
     token1Symbol: 'GUSDC',
@@ -69,13 +70,13 @@ describe('Quoting', () => {
       contractVersion: 'v2',
       fee: 3000,
       feeTier: 3000,
-      amountIn: '100',
-      amountOut: '14.66774',
+      amountIn: '1',
+      amountOut: '0.146929',
       token0Symbol: 'GALA',
       token1Symbol: 'GUSDC',
       tokenInIsToken0: true,
-      tradingFees: '0.27',
-      protocolFees: '0.03',
+      tradingFees: '0.0027',
+      protocolFees: '0.0003',
     });
     expect(quote.priceImpact).to.be.instanceOf(BigNumber);
   });
@@ -115,16 +116,30 @@ describe('Quoting', () => {
       data: { ...quoteBody.data, currentPrice: '1', newPrice: '1.1' },
     });
     const directQuote = await direct.quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1');
-    expect(directQuote.currentPrice.toFixed()).to.equal('1');
-    expect(directQuote.newPrice.toFixed()).to.equal('1.1');
+    expect(directQuote.currentPrice?.toFixed()).to.equal('1');
+    expect(directQuote.newPrice?.toFixed()).to.equal('1.1');
+
+    const priceOnly = service({
+      ...quoteBody,
+      data: {
+        ...quoteBody.data,
+        currentSqrtPrice: undefined,
+        newSqrtPrice: undefined,
+        currentPrice: '1',
+        newPrice: '1.1',
+      },
+    });
+    const priceOnlyQuote = await priceOnly.quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1');
+    expect(priceOnlyQuote.currentSqrtPrice).to.equal(undefined);
+    expect(priceOnlyQuote.newSqrtPrice).to.equal(undefined);
 
     const inverse = service({
       ...quoteBody,
       data: { ...quoteBody.data, tokenInIsToken0: false, currentSqrtPrice: '2', newSqrtPrice: '1' },
     });
     const inverseQuote = await inverse.quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1');
-    expect(inverseQuote.currentPrice.toFixed()).to.equal('0.25');
-    expect(inverseQuote.newPrice.toFixed()).to.equal('1');
+    expect(inverseQuote.currentPrice?.toFixed()).to.equal('0.25');
+    expect(inverseQuote.newPrice?.toFixed()).to.equal('1');
 
     const failed = service({ message: 'backend failed' }, 500);
     const failedError = await failed.quoting
@@ -168,9 +183,40 @@ describe('Quoting', () => {
       ...quoteBody,
       data: { ...quoteBody.data, currentSqrtPrice: undefined, newSqrtPrice: undefined },
     });
-    const quote = await missingPrice.quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1');
-    expect(quote.currentPrice.isNaN()).to.equal(true);
-    expect(quote.newPrice.isNaN()).to.equal(true);
+    const error = await missingPrice.quoting
+      .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
+      .catch((caught: unknown) => caught);
+    expect(error).to.be.instanceOf(GSwapSDKError);
+    expect((error as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+
+    for (const malformed of [
+      { ...quoteBody.data, contractVersion: 'v1' },
+      { ...quoteBody.data, fee: '3000' },
+      { ...quoteBody.data, fee: Number.NaN },
+      { ...quoteBody.data, amountOut: 1 },
+      { ...quoteBody.data, newTick: 1.5 },
+      { ...quoteBody.data, tokenInIsToken0: 'true' },
+      { ...quoteBody.data, currentSqrtPrice: {} as unknown },
+      { ...quoteBody.data, newSqrtPrice: null as unknown },
+      { ...quoteBody.data, currentPrice: '' },
+      { ...quoteBody.data, currentPrice: 'Infinity' },
+    ]) {
+      const invalid = service({ ...quoteBody, data: malformed });
+      const invalidError = await invalid.quoting
+        .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
+        .catch((caught: unknown) => caught);
+      expect((invalidError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+    }
+
+    const nonPositivePrice = service({
+      ...quoteBody,
+      data: { ...quoteBody.data, currentPrice: '0', newPrice: '-1' },
+    });
+    const nonPositiveError = await nonPositivePrice.quoting
+      .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
+      .catch((caught: unknown) => caught);
+    expect(nonPositiveError).to.be.instanceOf(GSwapSDKError);
+    expect((nonPositiveError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
 
     const nested = new Quoting(
       BASE,

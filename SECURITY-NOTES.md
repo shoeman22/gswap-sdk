@@ -11,3 +11,8 @@ or parse attacker-controlled elliptic input; native signatures are validated
 against the fixed 130-hex-byte contract format before submission. It remains
 until GalaChain publishes a compatible dependency update, at which point the
 override graph and `npm audit --omit=dev` should be rerun.
+
+Set `GSWAP_SDK=*` only while debugging in a trusted environment. Read logging
+prints backend request URLs and response data, which can include quote amounts
+and other application-sensitive values. It does not log private keys or signed
+write bodies.

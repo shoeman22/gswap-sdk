@@ -16,10 +16,18 @@ EIP-1193 provider such as MetaMask use `BrowserWalletSigner`.
 
 ## Configure an environment
 
-`env: 'stage'` selects the public testnet Chain Gateway and staging backend.
-`env: 'prod'` selects the mainnet endpoints. Individual
-`gatewayBaseUrl` and `dexBackendBaseUrl` options override the presets, which is
-useful for tests and private deployments.
+`env: 'stage'` selects the staging swap backend and `env: 'prod'` selects the
+production swap backend. The SDK sends every read and write through that
+backend. `dexBackendBaseUrl` overrides the preset, which is useful for tests and
+private deployments.
+
+| Preset  | Backend                                        |
+| ------- | ---------------------------------------------- |
+| `stage` | `https://swap-backend.stage.defi.ovh.gala.com` |
+| `prod`  | `https://dex-backend-prod1.defi.gala.com`      |
+
+These are the only hosts used by the SDK; it does not call public GalaChain
+gateway hosts directly.
 
 ```typescript
 import { GSwap, PrivateKeySigner } from '@gala-chain/gswap-sdk';

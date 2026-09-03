@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import type { ChainGateway } from '../src/classes/gateway.js';
 import { GSwapSDKError } from '../src/classes/gswap_sdk_error.js';
 import { SubmittedTransaction } from '../src/classes/submitted_transaction.js';
-import { Swaps } from '../src/classes/swaps.js';
+import { Swaps, type SwapAmount } from '../src/classes/swaps.js';
 import type { GalaChainSigner } from '../src/classes/signers.js';
 import type { Symbols } from '../src/classes/symbols.js';
 import type { IndexedTransaction } from '../src/types/v2_results.js';
@@ -130,5 +130,14 @@ describe('Swaps', () => {
       .catch((error: unknown) => error);
     expect(noSigner).to.be.instanceOf(GSwapSDKError);
     expect((noSigner as GSwapSDKError).code).to.equal('NO_SIGNER');
+
+    const malformedExactIn = await swaps
+      .swap(TOKEN_A, TOKEN_B, 500, { exactIn: undefined } as unknown as SwapAmount)
+      .catch((error: unknown) => error);
+    expect((malformedExactIn as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
+    const malformedExactOut = await swaps
+      .swap(TOKEN_A, TOKEN_B, 500, { exactOut: undefined } as unknown as SwapAmount)
+      .catch((error: unknown) => error);
+    expect((malformedExactOut as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
   });
 });

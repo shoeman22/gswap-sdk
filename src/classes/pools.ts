@@ -7,17 +7,12 @@ import { HttpClient } from './http_client.js';
 import type { Symbols } from './symbols.js';
 import { validateFee } from '../utils/validation.js';
 
-interface PoolPage {
-  results?: PoolInfo[];
-  nextPageBookmark?: string;
-}
-
 interface BackendEnvelope<T> {
   data: T;
 }
 
-type PoolGateway = Pick<ChainGateway, 'chainRead' | 'httpRequestor' | 'dexBackendBaseUrl'> & {
-  requestTimeoutMs?: number;
+type PoolGateway = Pick<ChainGateway, 'httpRequestor' | 'dexBackendBaseUrl'> & {
+  requestTimeoutMs?: number | undefined;
 };
 type PoolSymbols = Pick<Symbols, 'resolve'>;
 
@@ -41,7 +36,7 @@ export class Pools {
   private readonly http: HttpClient;
 
   /**
-   * Fetches every current-contract pool, following chain bookmarks.
+   * Fetches every current-contract pool from the swap backend.
    *
    * @example
    * ```ts
@@ -49,43 +44,20 @@ export class Pools {
    * console.log(pools.length);
    * ```
    */
-  public async getPools(options?: {
-    signal?: AbortSignal;
-    maxPages?: number;
-  }): Promise<PoolInfo[]> {
-    const pools: PoolInfo[] = [];
-    let bookmark: string | undefined;
-    const seenBookmarks = new Set<string>();
-    let pageCount = 0;
-    do {
-      pageCount += 1;
-      if (pageCount > (options?.maxPages ?? 1_000)) {
-        throw new GSwapSDKError(
-          'Pool pagination exceeded the maximum page count.',
-          'INVALID_CHAIN_RESPONSE',
-          {
-            maxPages: options?.maxPages ?? 1_000,
-          },
-        );
-      }
-      if (bookmark !== undefined) {
-        if (seenBookmarks.has(bookmark)) {
-          throw new GSwapSDKError(
-            'Pool pagination repeated a bookmark.',
-            'INVALID_CHAIN_RESPONSE',
-            { bookmark },
-          );
-        }
-        seenBookmarks.add(bookmark);
-      }
-      const body = bookmark === undefined ? {} : { bookmark };
-      const page = await this.gateway.chainRead<PoolPage>('FetchPools', body, {
-        ...(options?.signal === undefined ? {} : { signal: options.signal }),
+  public async getPools(options?: { signal?: AbortSignal | undefined }): Promise<PoolInfo[]> {
+    const response = await this.http.sendGetRequest<BackendEnvelope<unknown>>(
+      this.gateway.dexBackendBaseUrl,
+      '/v2/trade',
+      '/pools',
+      undefined,
+      options?.signal === undefined ? undefined : { signal: options.signal },
+    );
+    if (!Array.isArray(response.data)) {
+      throw new GSwapSDKError('Backend returned an invalid pool list.', 'INVALID_CHAIN_RESPONSE', {
+        data: response.data,
       });
-      pools.push(...(page.results ?? []));
-      bookmark = page.nextPageBookmark;
-    } while (bookmark !== undefined && bookmark !== '');
-    return pools;
+    }
+    return response.data as PoolInfo[];
   }
 
   /**
@@ -122,7 +94,7 @@ export class Pools {
    * @example
    * ```ts
    * const composite = await service.getCompositePool('GALA', 'GUSDC', 3000);
-   * console.log(composite.positions.length);
+   * console.log(composite.positions?.length ?? 0);
    * ```
    */
   public async getCompositePool(
@@ -134,10 +106,10 @@ export class Pools {
     const first = await resolveSymbol(this.symbols, token0);
     const second = await resolveSymbol(this.symbols, token1);
     const ordered = readOrderedSymbols(orderSymbols(first, second));
-    return this.gateway.chainRead<CompositePool>('FetchCompositePoolData', {
+    return this.getBackend<CompositePool>('/composite-pool', {
       token0: ordered.token0,
       token1: ordered.token1,
-      fee,
+      fee: String(fee),
     });
   }
 

@@ -5,6 +5,7 @@ import type {
   TradeDTO,
 } from '../src/types/v2_dtos.js';
 import type { SwapAmount } from '../src/classes/swaps.js';
+import { GSwap } from '../src/classes/gswap.js';
 
 const base = { token0: 'GALA', token1: 'GUSDC', fee: 3000, uniqueKey: 'u' } as const;
 
@@ -31,6 +32,12 @@ void validAdd;
 void validRemove;
 void validPool;
 void validSwap;
+
+const fromEnvironment = new GSwap({
+  walletAddress: process.env['GALACHAIN_ADDRESS'],
+  dexBackendBaseUrl: process.env['GSWAP_BACKEND_URL'],
+});
+void fromEnvironment;
 
 // @ts-expect-error Trade must contain exactly one trade-side quantity.
 const invalidTrade: TradeDTO = { ...base, sell0Qty: '1', buy1Qty: '1' };

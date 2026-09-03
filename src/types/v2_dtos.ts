@@ -17,8 +17,8 @@ export type TradeDTO = V2PoolWriteBase &
     | { sell0Qty?: never; sell1Qty?: never; buy0Qty: string; buy1Qty?: never }
     | { sell0Qty?: never; sell1Qty?: never; buy0Qty?: never; buy1Qty: string }
   ) & {
-    amountOutMinimum?: string;
-    amountInMaximum?: string;
+    amountOutMinimum?: string | undefined;
+    amountInMaximum?: string | undefined;
   };
 
 /** A v2 liquidity deposit with exactly one selected deposit quantity. */
@@ -53,8 +53,8 @@ export type CreatePoolDTO = {
   token0Symbol: string;
   token1Symbol: string;
   fee: FEE_TIER;
-  isPrivate?: boolean;
-  privateAccess?: string[];
+  isPrivate?: boolean | undefined;
+  privateAccess?: string[] | undefined;
   uniqueKey: string;
 } & (
   | { startingPrice: string; startingSqrtPrice?: never }
@@ -63,8 +63,8 @@ export type CreatePoolDTO = {
 
 /** Optional page cursor accepted by chain read methods. */
 export interface PageDTO {
-  limit?: number;
-  bookmark?: string;
+  limit?: number | undefined;
+  bookmark?: string | undefined;
 }
 
 /** Fetch all registered trading symbols. */
@@ -85,5 +85,5 @@ export type FetchPoolsDTO = Partial<FetchCompositePoolDataDTO> & PageDTO;
 
 /** Fetch all liquidity positions, optionally narrowed to a pool reference. */
 export interface FetchLiquidityPositionsDTO extends PageDTO {
-  pool?: string;
+  pool?: string | undefined;
 }

@@ -7,12 +7,12 @@ sidebar_position: 2
 The v2 contract has one signature scheme per signer type. The SDK signs the
 unsigned DTO exactly as it will be posted to the Chain Gateway.
 
-| Signer | Signature | Account/address input |
-| --- | --- | --- |
-| `PrivateKeySigner` | GalaChain native `signatures.getSignature` | Recovered from the private key |
-| `GalaWalletSigner` on current wallets | `gala_signChainDto` with `native` | Selected `0x&lt;40-hex&gt;` account (`eth|0x...` accepted) |
-| `GalaWalletSigner` on older supported wallets | Personal-sign fallback | The same selected Ethereum account |
-| `BrowserWalletSigner` | EIP-1193 `personal_sign` with the SDK prefix | Selected `0x&lt;40-hex&gt;` account |
+| Signer                                        | Signature                                    | Account/address input               |
+| --------------------------------------------- | -------------------------------------------- | ----------------------------------- |
+| `PrivateKeySigner`                            | GalaChain native `signatures.getSignature`   | Recovered from the private key      |
+| `GalaWalletSigner` on current wallets         | `gala_signChainDto` with `native`            | Selected `0x&lt;40-hex&gt;` account |
+| `GalaWalletSigner` on older supported wallets | Personal-sign fallback                       | The same selected Ethereum account  |
+| `BrowserWalletSigner`                         | EIP-1193 `personal_sign` with the SDK prefix | Selected `0x&lt;40-hex&gt;` account |
 
 Native signatures have no prefix, EIP-712 domain, or typed-data envelope.
 Personal-sign signatures cover the serialized DTO with the calculated
@@ -41,9 +41,11 @@ Current Gala Wallet builds support the four-parameter call:
 gala_signChainDto([serialize(dto), address, methodName, 'native'])
 ```
 
-The SDK falls back for older wallet builds to the three-parameter
-`gala_signChainDto` contract without the final `native` scheme parameter. The
-selected Ethereum account remains the same in both calls.
+The SDK falls back for older wallet builds to the three-argument
+`gala_signChainDto` contract without the final `native` scheme parameter:
+`[serialize({...dto, prefix}), address, methodName]`. The selected Ethereum
+account remains the same in both calls, and the fallback resolves the bare
+`eth|0x...` identity.
 
 ## Browser wallets
 
@@ -51,6 +53,7 @@ Pass an EIP-1193 provider and the selected `0x` Ethereum account to
 `BrowserWalletSigner`. The signer requests `personal_sign` and sends
 `{ ...dto, prefix, signature }` to the gateway.
 
-Never mix a personal-sign signature with a native alias, or a native signature
-with an `eth|...` identity. A mismatch is reported as `SIGNER_MISMATCH` or
-`SIGNATURE_INVALID`.
+For v2 DEX operations, `X-Wallet-Address` is only an attribution hint; it does
+not cause a `SIGNER_MISMATCH` check because these operations have no
+`signerField`. `SIGNER_MISMATCH` applies to contract operations that explicitly
+name an actor. A mismatched signing scheme can still produce `SIGNATURE_INVALID`.

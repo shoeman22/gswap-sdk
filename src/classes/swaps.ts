@@ -13,15 +13,15 @@ import type { Symbols } from './symbols.js';
 export type SwapAmount =
   | {
       exactIn: NumericAmount;
-      exactOut?: never;
-      amountOutMinimum?: NumericAmount;
-      amountInMaximum?: never;
+      exactOut?: undefined;
+      amountOutMinimum?: NumericAmount | undefined;
+      amountInMaximum?: undefined;
     }
   | {
-      exactIn?: never;
+      exactIn?: undefined;
       exactOut: NumericAmount;
-      amountOutMinimum?: never;
-      amountInMaximum?: NumericAmount;
+      amountOutMinimum?: undefined;
+      amountInMaximum?: NumericAmount | undefined;
     };
 type SwapGateway = Pick<ChainGateway, 'submit'>;
 type SwapSymbols = Pick<Symbols, 'resolve'>;
@@ -59,7 +59,7 @@ export class Swaps {
     tokenOut: TokenRef,
     fee: FEE_TIER,
     amount: SwapAmount,
-  ): Promise<SubmittedTransaction<IndexedTransaction>> {
+  ): Promise<SubmittedTransaction<IndexedTransaction | null>> {
     validateFee(fee);
 
     const dto = await this.buildTradeDto(tokenIn, tokenOut, fee, amount);
@@ -85,19 +85,30 @@ export class Swaps {
       token0: ordered.token0,
       token1: ordered.token1,
       fee,
-      uniqueKey: `gswap-sdk-${crypto.randomUUID()}`,
+      uniqueKey: `gswap-sdk-${globalThis.crypto.randomUUID()}`,
     };
 
     if ('exactIn' in amount) {
-      validateNumericAmount(amount.exactIn, 'exactIn');
-      dto[tokenInIsToken0 ? 'sell0Qty' : 'sell1Qty'] = toDecimalString(amount.exactIn);
+      const exactIn = amount.exactIn;
+      if (exactIn === undefined) {
+        throw new GSwapSDKError('exactIn is required for an exact-input swap.', 'VALIDATION_ERROR');
+      }
+      validateNumericAmount(exactIn, 'exactIn');
+      dto[tokenInIsToken0 ? 'sell0Qty' : 'sell1Qty'] = toDecimalString(exactIn);
       if (amount.amountOutMinimum !== undefined) {
         validateNumericAmount(amount.amountOutMinimum, 'amountOutMinimum', true);
         dto['amountOutMinimum'] = toDecimalString(amount.amountOutMinimum);
       }
     } else {
-      validateNumericAmount(amount.exactOut, 'exactOut');
-      dto[tokenInIsToken0 ? 'buy1Qty' : 'buy0Qty'] = toDecimalString(amount.exactOut);
+      const exactOut = amount.exactOut;
+      if (exactOut === undefined) {
+        throw new GSwapSDKError(
+          'exactOut is required for an exact-output swap.',
+          'VALIDATION_ERROR',
+        );
+      }
+      validateNumericAmount(exactOut, 'exactOut');
+      dto[tokenInIsToken0 ? 'buy1Qty' : 'buy0Qty'] = toDecimalString(exactOut);
       if (amount.amountInMaximum !== undefined) {
         validateNumericAmount(amount.amountInMaximum, 'amountInMaximum', true);
         dto['amountInMaximum'] = toDecimalString(amount.amountInMaximum);

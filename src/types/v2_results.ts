@@ -86,8 +86,8 @@ export interface QuoteResult {
   fee: number;
   amountIn: string;
   amountOut: string;
-  currentSqrtPrice: string;
-  newSqrtPrice: string;
+  currentSqrtPrice?: string;
+  newSqrtPrice?: string;
   newTick: number;
   tradingFees: string;
   protocolFees: string;
@@ -97,9 +97,9 @@ export interface QuoteResult {
   token1Symbol: string;
   tokenInIsToken0: boolean;
   feeTier: number;
-  currentPrice: BigNumber;
-  newPrice: BigNumber;
-  priceImpact: BigNumber;
+  currentPrice?: BigNumber;
+  newPrice?: BigNumber;
+  priceImpact?: BigNumber;
 }
 
 /** Indexed trade data returned by explore confirmation. */
@@ -115,6 +115,22 @@ export interface IndexedTransaction {
   amount1: number;
   volume: number;
   transactionTime: string | null;
+}
+
+/** A token balance returned by the backend user-assets route. */
+export interface UserAsset {
+  image: string;
+  name: string;
+  decimals: number;
+  verify: boolean;
+  symbol: string;
+  quantity: string;
+}
+
+/** User token balances returned by the backend. */
+export interface UserAssetsResult {
+  tokens: UserAsset[];
+  count: number;
 }
 
 /** Backend add-liquidity estimate. */
@@ -148,6 +164,7 @@ export interface TradingSymbol {
 /** Result envelope returned by the chain gateway for a submitted write. */
 export interface ChainSubmissionResult {
   transactionId?: string;
+  blockNumber?: number | null;
   mode: 'sync';
   result: unknown;
 }

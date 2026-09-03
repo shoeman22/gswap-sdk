@@ -53,18 +53,10 @@ export function parseTokenClassKey(tokenClassKey: TokenRef): GalaChainTokenClass
   }
 
   const [collection, category, type, additionalKey] = parts;
-  if (
-    collection === undefined ||
-    category === undefined ||
-    type === undefined ||
-    additionalKey === undefined
-  ) {
-    throw new Error('Invalid token class key: expected four non-empty parts');
-  }
   return {
-    collection,
-    category,
-    type,
-    additionalKey,
+    collection: collection as string,
+    category: category as string,
+    type: type as string,
+    additionalKey: additionalKey as string,
   };
 }

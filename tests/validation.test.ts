@@ -39,6 +39,10 @@ describe('Validation Utilities', () => {
         GSwapSDKError,
         'Invalid amount: must be positive',
       );
+      expect(() => validateNumericAmount('-1', 'amount', true)).to.throw(
+        GSwapSDKError,
+        'Invalid amount: must be non-negative',
+      );
       expect(() => validateNumericAmount('-1', 'amount')).to.throw(
         GSwapSDKError,
         'Invalid amount: must be positive',

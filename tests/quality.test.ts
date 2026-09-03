@@ -13,6 +13,7 @@ import { SubmittedTransaction } from '../src/classes/submitted_transaction.js';
 import { Symbols } from '../src/classes/symbols.js';
 import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
 import { FEE_TIER } from '../src/types/fees.js';
+import type { Position } from '../src/types/v2_results.js';
 import {
   alignTickDown,
   alignTickUp,
@@ -52,8 +53,6 @@ function makeResponse(
 
 function gateway(requestor: HttpRequestor): ChainGateway {
   return new ChainGateway({
-    gatewayBaseUrl: `${BASE}/gateway/`,
-    dexContractBasePath: 'api/asset/dex-contract/',
     dexBackendBaseUrl: `${BASE}/backend/`,
     httpRequestor: requestor,
   });
@@ -128,18 +127,16 @@ describe('quality boundaries', () => {
 
     const client = new GSwap({
       env: 'stage',
-      gatewayBaseUrl: `${BASE}/gateway/`,
       dexBackendBaseUrl: `${BASE}/backend/`,
       httpRequestor: requestor,
       chainCallTimeoutMs: 123,
     });
-    expect(client.gatewayBaseUrl).to.equal(`${BASE}/gateway`);
     expect(client.dexBackendBaseUrl).to.equal(`${BASE}/backend`);
     expect(client.chainCallTimeoutMs).to.equal(123);
     expect(client.assets).to.be.instanceOf(Assets);
     const defaultClient = new GSwap({ walletAddress: 'client|alice' });
-    expect(defaultClient.gatewayBaseUrl).to.equal('https://gateway-mainnet.galachain.com');
-    expect(new GSwap().gatewayBaseUrl).to.equal('https://gateway-mainnet.galachain.com');
+    expect(defaultClient.dexBackendBaseUrl).to.equal('https://dex-backend-prod1.defi.gala.com');
+    expect(new GSwap().dexBackendBaseUrl).to.equal('https://dex-backend-prod1.defi.gala.com');
   });
 
   it('maps every gateway bounce code and HTTP response shape', async () => {
@@ -150,6 +147,7 @@ describe('quality boundaries', () => {
       'DTO_INVALID',
       'BOUNDS_VIOLATION',
       'SYMBOL_CONFLICT',
+      'INVALID_STRINGS_INSTRUCTIONS',
       'CHAIN_DISPATCH_FAILED',
     ];
     for (const code of codes) {
@@ -192,6 +190,12 @@ describe('quality boundaries', () => {
       .submit('Trade', { uniqueKey: 'malformed' })
       .catch((caught: unknown) => caught);
     expect((malformed as GSwapSDKError).code).to.equal('HTTP_ERROR');
+    const objectWithoutMessage = await gateway(async () => makeResponse({ unexpected: true }, 500))
+      .submit('Trade', { uniqueKey: 'object-without-message' })
+      .catch((caught: unknown) => caught);
+    expect((objectWithoutMessage as GSwapSDKError).message).to.equal(
+      'Gateway request failed with HTTP 500',
+    );
 
     const invalidMode = await gateway(async () =>
       makeResponse({ data: { mode: 'async', transactionId: 'tx' } }, 201),
@@ -216,54 +220,81 @@ describe('quality boundaries', () => {
       .submit('Trade', { uniqueKey: 'null-retry' })
       .catch((caught: unknown) => caught);
     expect((nullRetry as GSwapSDKError).retryAfterMs).to.equal(undefined);
-    const chainHttpError = await gateway(async () => makeResponse('chain unavailable', 503))
-      .chainRead('FetchPools', {})
-      .catch((caught: unknown) => caught);
-    expect((chainHttpError as GSwapSDKError).code).to.equal('HTTP_ERROR');
-    const noMessageChain = await gateway(async () => makeResponse({ Status: 0 }))
-      .chainRead('FetchPools', {})
-      .catch((caught: unknown) => caught);
-    expect((noMessageChain as GSwapSDKError).code).to.equal('CHAIN_ERROR');
-  });
 
-  it('unwraps chain error envelopes, malformed responses, arrays, and bookmarks', async () => {
-    const nested = await gateway(async () =>
-      makeResponse({ error: { ErrorKey: 'NESTED', Message: 'nested failure' } }),
-    )
-      .chainRead('FetchPools', {})
+    const missingData = await gateway(async () => makeResponse({ status: 201 }, 201))
+      .submit('Trade', { uniqueKey: 'missing-data' })
       .catch((caught: unknown) => caught);
-    expect((nested as GSwapSDKError).code).to.equal('NESTED');
+    expect((missingData as GSwapSDKError).code).to.equal('INVALID_GATEWAY_RESPONSE');
 
-    const statusOnly = await gateway(async () => makeResponse({ Status: 0, Message: 'failed' }))
-      .chainRead('FetchPools', {})
-      .catch((caught: unknown) => caught);
-    expect((statusOnly as GSwapSDKError).code).to.equal('CHAIN_ERROR');
+    const uppercaseData = await gateway(async () =>
+      makeResponse({ Status: 1, Data: { mode: 'sync', result: null } }, 201),
+    ).submit('Trade', { uniqueKey: 'uppercase-data' });
+    expect(uppercaseData.transactionId).to.equal(null);
 
-    const invalid = await gateway(async () => makeResponse({ Status: 2 }))
-      .chainRead('FetchPools', {})
-      .catch((caught: unknown) => caught);
-    expect((invalid as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
-    expect(
-      await gateway(async () => makeResponse({ Status: 1, data: { lower: true } })).chainRead(
-        'FetchPools',
-        {},
+    const bodyBlock = await gateway(async () =>
+      makeResponse({ data: { mode: 'sync', result: null, blockNumber: 8 } }, 201),
+    ).submit('AddLiquidity', { uniqueKey: 'body-block' });
+    expect(bodyBlock.blockNumber).to.equal(8);
+
+    const bodyMetadata = await gateway(async () =>
+      makeResponse(
+        { data: { mode: 'sync', result: null, transactionId: 'body-tx', blockNumber: 9 } },
+        201,
+        { headers: { 'x-transaction-id': 'header-tx', 'x-block-number': '10' } },
       ),
-    ).to.deep.equal({ lower: true });
+    ).submit('AddLiquidity', { uniqueKey: 'body-metadata' });
+    expect(bodyMetadata.transactionId).to.equal('body-tx');
+    expect(bodyMetadata.blockNumber).to.equal(9);
 
-    let calls = 0;
-    const paged = gateway(async () => {
-      calls += 1;
-      return calls === 1
-        ? makeResponse({ Status: 1, Data: [{ value: 1 }] })
-        : makeResponse({ Status: 1, Data: { value: 2 } });
-    });
-    expect(await paged.pageAll<{ value: number }>('FetchPools')).to.deep.equal([{ value: 1 }]);
-    expect(await paged.pageAll<{ value: number }>('FetchPools')).to.deep.equal([]);
-    expect(
-      await gateway(async () =>
-        makeResponse({ Status: 1, Data: { nextPageBookmark: '' } }),
-      ).pageAll('FetchPools'),
-    ).to.deep.equal([]);
+    const positionConfirmation = async (): Promise<null> => null;
+    const hookedSubmission = await gateway(async () =>
+      makeResponse({ data: { mode: 'sync', result: null } }, 201),
+    ).submit('RemoveLiquidity', { uniqueKey: 'hooked' }, { positionConfirmation });
+    expect(hookedSubmission.method).to.equal('RemoveLiquidity');
+
+    const invalidBodyBlock = await gateway(async () =>
+      makeResponse({ data: { mode: 'sync', result: null, blockNumber: -1 } }, 201),
+    )
+      .submit('Trade', { uniqueKey: 'invalid-body-block' })
+      .catch((caught: unknown) => caught);
+    expect((invalidBodyBlock as GSwapSDKError).code).to.equal('INVALID_GATEWAY_RESPONSE');
+
+    const invalidBodyTransaction = await gateway(async () =>
+      makeResponse({ data: { mode: 'sync', result: null, transactionId: 42 } }, 201),
+    )
+      .submit('Trade', { uniqueKey: 'invalid-body-transaction' })
+      .catch((caught: unknown) => caught);
+    expect((invalidBodyTransaction as GSwapSDKError).code).to.equal('INVALID_GATEWAY_RESPONSE');
+
+    const recordHeaders = await gateway(async () =>
+      makeResponse({ data: { mode: 'sync', result: null, blockNumber: null } }, 201, {
+        headers: { 'x-transaction-id': 'record-tx', 'x-block-number': '7' },
+      }),
+    ).submit('AddLiquidity', { uniqueKey: 'record-headers' });
+    expect(recordHeaders.transactionId).to.equal('record-tx');
+    expect(recordHeaders.blockNumber).to.equal(7);
+
+    const invalidBlockHeader = await gateway(async () =>
+      makeResponse({ data: { mode: 'sync', result: null, blockNumber: null } }, 201, {
+        headers: { 'x-block-number': 'not-a-block' },
+      }),
+    ).submit('AddLiquidity', { uniqueKey: 'invalid-block-header' });
+    expect(invalidBlockHeader.blockNumber).to.equal(null);
+
+    const emptyTransactionHeader = await gateway(async () =>
+      makeResponse({ data: { mode: 'sync', result: null } }, 201, {
+        headers: { 'x-transaction-id': '' },
+      }),
+    ).submit('Trade', { uniqueKey: 'empty-transaction-header' });
+    expect(emptyTransactionHeader.transactionId).to.equal(null);
+
+    const transportFailure = await gateway(async () => {
+      throw new Error('transport failed');
+    })
+      .submit('Trade', { uniqueKey: 'transport-failure' })
+      .catch((caught: unknown) => caught);
+    expect(transportFailure).to.be.instanceOf(Error);
+    expect((transportFailure as Error).message).to.equal('transport failed');
   });
 
   it('handles transaction confirmation outcomes and error helpers', async () => {
@@ -277,6 +308,96 @@ describe('quality boundaries', () => {
     });
     expect(await nonTrade.confirm()).to.equal(null);
 
+    const malformedConfirmation = new SubmittedTransaction({
+      method: 'Trade',
+      uniqueKey: 'malformed-confirmation',
+      transactionId: null,
+      result: {},
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () => makeResponse('not an object'),
+    });
+    const malformedConfirmationError = await malformedConfirmation
+      .confirm()
+      .catch((error: unknown) => error);
+    expect((malformedConfirmationError as GSwapSDKError).code).to.equal('CONFIRMATION_FAILED');
+
+    const retryAfterConfirmation = new SubmittedTransaction({
+      method: 'Trade',
+      uniqueKey: 'retry-after-confirmation',
+      transactionId: null,
+      result: {},
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () =>
+        makeResponse(
+          { error: true, message: 'No indexed transaction for that uniqueKey yet' },
+          429,
+          { headers: { 'Retry-After': '0' } },
+        ),
+    });
+    const retryAfterError = await retryAfterConfirmation
+      .confirm({ timeoutMs: 1, pollIntervalMs: 1 })
+      .catch((error: unknown) => error);
+    expect((retryAfterError as GSwapSDKError).code).to.equal('CONFIRMATION_TIMEOUT');
+
+    const retryWithoutHeader = new SubmittedTransaction({
+      method: 'Trade',
+      uniqueKey: 'retry-without-header',
+      transactionId: null,
+      result: {},
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () => makeResponse({ error: true }, 429),
+    });
+    const retryWithoutHeaderError = await retryWithoutHeader
+      .confirm({ timeoutMs: 1, pollIntervalMs: 1 })
+      .catch((error: unknown) => error);
+    expect((retryWithoutHeaderError as GSwapSDKError).code).to.equal('CONFIRMATION_FAILED');
+
+    const retryWithInvalidHeader = new SubmittedTransaction({
+      method: 'Trade',
+      uniqueKey: 'retry-with-invalid-header',
+      transactionId: null,
+      result: {},
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () =>
+        makeResponse({ error: true }, 429, { headers: { get: () => 'invalid' } }),
+    });
+    const retryWithInvalidHeaderError = await retryWithInvalidHeader
+      .confirm({ timeoutMs: 1, pollIntervalMs: 1 })
+      .catch((error: unknown) => error);
+    expect((retryWithInvalidHeaderError as GSwapSDKError).code).to.equal('CONFIRMATION_FAILED');
+
+    const positionConfirmation = new SubmittedTransaction({
+      method: 'AddLiquidity',
+      uniqueKey: 'position-timeout',
+      transactionId: null,
+      result: {},
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () => makeResponse({}),
+      positionConfirmation: async () => null,
+    });
+    const positionError = await positionConfirmation
+      .confirm({ timeoutMs: 1, pollIntervalMs: 1 })
+      .catch((error: unknown) => error);
+    expect((positionError as GSwapSDKError).code).to.equal('CONFIRMATION_TIMEOUT');
+
+    let positionCalls = 0;
+    const eventualPosition = new SubmittedTransaction({
+      method: 'RemoveLiquidity',
+      uniqueKey: 'eventual-position',
+      transactionId: null,
+      result: {},
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () => makeResponse({}),
+      positionConfirmation: async (): Promise<Position | null> => {
+        positionCalls += 1;
+        return positionCalls === 1 ? null : ({} as Position);
+      },
+    });
+    expect(await eventualPosition.confirm({ timeoutMs: 1_000, pollIntervalMs: 1 })).to.deep.equal(
+      {},
+    );
+    expect(positionCalls).to.equal(2);
+
     const missingRoute = new SubmittedTransaction({
       method: 'Trade',
       uniqueKey: 'missing',
@@ -289,6 +410,20 @@ describe('quality boundaries', () => {
       .confirm({ timeoutMs: 1, pollIntervalMs: 0 })
       .catch((error: unknown) => error);
     expect((routeError as GSwapSDKError).code).to.equal('CONFIRMATION_FAILED');
+
+    const knownButNotPending = new SubmittedTransaction({
+      method: 'Trade',
+      uniqueKey: 'known-but-not-pending',
+      transactionId: 'tx-known',
+      blockNumber: 3,
+      result: {},
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () => makeResponse({ error: true, message: 'other failure' }, 404),
+    });
+    const knownFailure = await knownButNotPending
+      .confirm({ timeoutMs: 1, pollIntervalMs: 0 })
+      .catch((error: unknown) => error);
+    expect((knownFailure as GSwapSDKError).code).to.equal('CONFIRMATION_FAILED');
     const noMessage = new SubmittedTransaction({
       method: 'Trade',
       uniqueKey: 'no-message',
@@ -315,10 +450,25 @@ describe('quality boundaries', () => {
       transactionId: 'tx-text',
       uniqueKey: 'text',
     });
+    const wrappedResponse = new SubmittedTransaction({
+      method: 'Trade',
+      uniqueKey: 'wrapped',
+      transactionId: null,
+      result: {},
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () => makeResponse({ data: { transactionId: 'tx-wrapped' } }),
+    });
+    expect(await wrappedResponse.confirm()).to.deep.equal({
+      transactionId: 'tx-wrapped',
+      uniqueKey: 'wrapped',
+    });
 
     expect(GSwapSDKError.noSignerError().code).to.equal('NO_SIGNER');
     expect(GSwapSDKError.noPoolAvailableError('A', 'B').code).to.equal('NO_POOL_AVAILABLE');
     expect(GSwapSDKError.insufficientLiquidityError('A', 'B', 0).details?.['fee']).to.equal(0);
+    expect(
+      GSwapSDKError.fromChainError('CHAIN_ERROR', 'rejected', { source: 'test' }).details,
+    ).to.deep.include({ source: 'test', errorKey: 'CHAIN_ERROR' });
     expect(
       GSwapSDKError.unknownTokenError({
         collection: 'A',
@@ -329,9 +479,6 @@ describe('quality boundaries', () => {
     ).to.equal('UNKNOWN_TOKEN');
     expect(GSwapSDKError.confirmationTimeoutError('timeout').details?.['uniqueKey']).to.equal(
       'timeout',
-    );
-    expect(GSwapSDKError.incorrectTokenOrderingError('B', 'A').code).to.equal(
-      'INCORRECT_TOKEN_ORDERING',
     );
     expect(getObjectProperty({ nested: { ok: true } }, 'nested')).to.deep.equal({ ok: true });
     expect(getObjectProperty({ nested: null }, 'nested')).to.equal(undefined);
@@ -344,9 +491,7 @@ describe('quality boundaries', () => {
   it('covers symbol cache expiry, key formats, and ordering guards', async () => {
     let calls = 0;
     const service = new Symbols({
-      pageAll: async <T>(_method: string, _dto?: Record<string, unknown>): Promise<T[]> => {
-        void _method;
-        void _dto;
+      httpRequestor: async (): Promise<HTTPResponse> => {
         calls += 1;
         const symbols = [
           {
@@ -366,8 +511,10 @@ describe('quality boundaries', () => {
             decimals: 6,
           },
         ];
-        return symbols as unknown as T[];
+        return makeResponse({ data: symbols });
       },
+      dexBackendBaseUrl: BASE,
+      requestTimeoutMs: 30_000,
     });
     const originalNow = Date.now;
     let now = 1_000;
@@ -392,6 +539,31 @@ describe('quality boundaries', () => {
       expect(calls).to.equal(2);
       const unknown = await service.resolve('UNKNOWN').catch((error: unknown) => error);
       expect((unknown as GSwapSDKError).code).to.equal('UNKNOWN_TOKEN');
+
+      let refreshCalls = 0;
+      const refreshed = new Symbols({
+        httpRequestor: async () => {
+          refreshCalls += 1;
+          return makeResponse({
+            data:
+              refreshCalls === 1
+                ? []
+                : [
+                    {
+                      symbol: 'GALA',
+                      collection: 'GALA',
+                      category: 'Unit',
+                      type: 'none',
+                      additionalKey: 'none',
+                      decimals: 18,
+                    },
+                  ],
+          });
+        },
+        dexBackendBaseUrl: BASE,
+      });
+      expect(await refreshed.resolve('GALA')).to.have.property('symbol', 'GALA');
+      expect(refreshCalls).to.equal(2);
     } finally {
       Date.now = originalNow;
     }
@@ -419,6 +591,8 @@ describe('quality boundaries', () => {
     expect(Number.isNaN(tickFromPrice(Infinity))).to.equal(true);
     const tick = 60;
     expect(sqrtPriceToTick(tickToSqrtPrice(tick))).to.equal(tick);
+    expect(sqrtPriceToTick(tickToSqrtPrice(-887272))).to.equal(-887272);
+    expect(sqrtPriceToTick(tickToSqrtPrice(887272))).to.equal(887272);
     expect(sqrtPriceToTick(tickToSqrtPrice(tick).times('1.00006'))).to.equal(61);
     expect(sqrtPriceToTick(tickToSqrtPrice(tick).dividedBy('1.00001'))).to.equal(59);
     expect(tickFromPrice(tickToSqrtPrice(20).pow(2))).to.equal(20);

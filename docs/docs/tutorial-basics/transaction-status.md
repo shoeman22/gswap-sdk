@@ -5,7 +5,8 @@ sidebar_position: 6
 # Transaction Status
 
 V2 writes are synchronous. Each write returns a `SubmittedTransaction` with
-the executed gateway result, a `uniqueKey`, and usually a `transactionId`.
+the executed gateway result, a `uniqueKey`, and transaction metadata when the
+backend provides it (`transactionId` and `blockNumber` may be `null`).
 There is no `PendingTransaction`, event socket, bundle ID, or `.wait()` API.
 
 ```typescript
@@ -13,6 +14,7 @@ const tx = await gSwap.swaps.swap('GALA', 'GUSDC', 3000, { exactIn: '10' });
 
 console.log('Correlation key:', tx.uniqueKey);
 console.log('Transaction ID:', tx.transactionId ?? '(not indexed yet)');
+console.log('Block:', tx.blockNumber ?? '(not reported)');
 const indexed = await tx.confirm();
 console.log('Indexed record:', indexed);
 ```
@@ -26,7 +28,10 @@ GET {dexBackend}/explore/transaction?uniqueKey={uniqueKey}
 While the data-sync indexer is catching up, this endpoint can return `404`.
 That means “not indexed yet”, not that the synchronous chain write failed.
 `confirm()` keeps polling according to the SDK's confirmation policy and
-returns the indexed transaction when it appears.
+returns the indexed transaction when it appears. If both transaction metadata
+fields are already present and the first verification read still reports a
+pending index, it returns `null` after that verification rather than spinning
+on an identifier the backend already supplied.
 
 Liquidity writes use the same `SubmittedTransaction` abstraction, but confirm
 by re-reading the affected position because non-Trade chain responses may not

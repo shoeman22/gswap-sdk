@@ -4,6 +4,7 @@ import type { TokenRef } from '../utils/ordering.js';
 import { compositeKeyOf, orderSymbols, parseTokenClassKey } from '../utils/ordering.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 import type { ChainGateway } from './gateway.js';
+import { HttpClient } from './http_client.js';
 
 const SYMBOL_CACHE_TTL_MS = 60_000;
 
@@ -13,8 +14,16 @@ export class Symbols {
   private cachedAt = 0;
   private refreshInFlight: Promise<TradingSymbol[]> | undefined;
 
-  /** Create a symbol service backed by the chain gateway. */
-  constructor(private readonly gateway: Pick<ChainGateway, 'pageAll'>) {}
+  private readonly http: HttpClient;
+
+  /** Create a symbol service backed by the swap backend. */
+  constructor(
+    private readonly gateway: Pick<ChainGateway, 'httpRequestor' | 'dexBackendBaseUrl'> & {
+      requestTimeoutMs?: number | undefined;
+    },
+  ) {
+    this.http = new HttpClient(gateway.httpRequestor, gateway.requestTimeoutMs);
+  }
 
   /** List all registered GalaChainDex trading symbols, cached for 60 seconds. */
   public async list(): Promise<TradingSymbol[]> {
@@ -22,8 +31,9 @@ export class Symbols {
       return this.cachedSymbols;
     }
     if (this.refreshInFlight !== undefined) return this.refreshInFlight;
-    this.refreshInFlight = this.gateway
-      .pageAll<TradingSymbol>('FetchTokenTradingSymbols', {})
+    this.refreshInFlight = this.http
+      .sendGetRequest<{ data: unknown }>(this.gateway.dexBackendBaseUrl, '/v2/trade', '/symbols')
+      .then((response) => parseSymbols(response.data))
       .then((symbols) => {
         this.cachedSymbols = symbols;
         this.cachedAt = Date.now();
@@ -101,6 +111,30 @@ export class Symbols {
       flipped: token0Symbol !== resolvedA.symbol,
     };
   }
+}
+
+function parseSymbols(value: unknown): TradingSymbol[] {
+  if (!Array.isArray(value) || !value.every(isTradingSymbol)) {
+    throw new GSwapSDKError('Backend returned an invalid symbol list.', 'INVALID_CHAIN_RESPONSE', {
+      data: value,
+    });
+  }
+  return value;
+}
+
+function isTradingSymbol(value: unknown): value is TradingSymbol {
+  if (typeof value !== 'object' || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry['symbol'] === 'string' &&
+    typeof entry['collection'] === 'string' &&
+    typeof entry['category'] === 'string' &&
+    typeof entry['type'] === 'string' &&
+    typeof entry['additionalKey'] === 'string' &&
+    typeof entry['decimals'] === 'number' &&
+    Number.isInteger(entry['decimals']) &&
+    entry['decimals'] >= 0
+  );
 }
 
 function isCompositeKey(ref: string): boolean {
