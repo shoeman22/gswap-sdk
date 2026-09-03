@@ -1,6 +1,6 @@
 {
   "name": "@gala-chain/gswap-sdk",
-  "version": "0.0.10",
+  "version": "1.0.0-rc.1",
   "description": "A source development kit for interacting with GSwap.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -79,10 +79,8 @@
   "dependencies": {
     "@gala-chain/api": "^2.3.2",
     "@gala-chain/connect": "^2.3.2",
-    "@gala-chain/dex": "^1.0.26",
     "bignumber.js": "^9.3.0",
-    "debug": "^4.4.1",
-    "socket.io-client": "^4.8.1"
+    "debug": "^4.4.1"
   },
   "publishConfig": {
     "access": "public"
