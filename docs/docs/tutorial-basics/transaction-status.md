@@ -1,65 +1,40 @@
 ---
-sidebar_position: 3
+sidebar_position: 6
 ---
 
-# Transaction Status Monitoring
+# Transaction Status
 
-This guide covers how to monitor transaction status using gSwap's WebSocket connection.
-
-## Prerequisites
-
-Make sure you've completed the [Getting Started](../getting-started.md) guide and have your SDK properly configured.
-
-## Global Connection Management
-
-GSwap uses a shared global WebSocket connection for all instances. Call `GSwap.events.connectEventSocket()` during application initialization:
+V2 writes are synchronous. Each write returns a `SubmittedTransaction` with
+the executed gateway result, a `uniqueKey`, and usually a `transactionId`.
+There is no `PendingTransaction`, event socket, bundle ID, or `.wait()` API.
 
 ```typescript
-import { GSwap } from '@gala-chain/gswap-sdk';
+const tx = await gSwap.swaps.swap('GALA', 'GUSDC', 3000, { exactIn: '10' });
 
-// Application initialization
-await GSwap.events.connectEventSocket();
+console.log('Correlation key:', tx.uniqueKey);
+console.log('Transaction ID:', tx.transactionId ?? '(not indexed yet)');
+const indexed = await tx.confirm();
+console.log('Indexed record:', indexed);
 ```
 
-When your application shuts down, clean up the connection:
+For a `Trade`, `confirm()` polls:
 
-```typescript
-// Application cleanup
-GSwap.events.disconnectEventSocket();
+```text
+GET {dexBackend}/explore/transaction?uniqueKey={uniqueKey}
 ```
 
-## Transaction Waiting
+While the data-sync indexer is catching up, this endpoint can return `404`.
+That means “not indexed yet”, not that the synchronous chain write failed.
+`confirm()` keeps polling according to the SDK's confirmation policy and
+returns the indexed transaction when it appears.
 
-After connecting, you can use the `wait()` method on any transaction to monitor its status:
+Liquidity writes use the same `SubmittedTransaction` abstraction, but confirm
+by re-reading the affected position because non-Trade chain responses may not
+have a transaction index row. Use the canonical position identity:
+`token0`, `token1`, `fee`, `owner`, `tickLower`, and `tickUpper`.
 
-```typescript
-const pendingTx = await gSwap.swaps.swap(/* params */);
-const result = await pendingTx.wait();
-console.log('Transaction completed!', result);
-```
-
-The `wait()` method will throw an error if you have not connected to the event socket first (or if you have and the transaction fails or times out).
-
-Note that a timeout does not _necessarily_ mean that the transaction failed. If the connection to the event socket is unstable then the event may not be received, or the transaction may take longer than expected to be processed.
-
-## Manual Transaction Event Monitoring
-
-For advanced use cases, you can listen to WebSocket events directly:
-
-```typescript
-// Get the socket client for manual event listening
-const socketClient = await GSwap.events.connectEventSocket();
-
-// Listen to all transaction events
-socketClient.on('transaction', (transactionId: string, response: BundlerResponse) => {
-  console.log(`Transaction ${transactionId} status: ${response.status}`);
-
-  if (response.status === 'PROCESSED') {
-    console.log('Transaction completed:', response.data);
-  } else if (response.status === 'FAILED') {
-    console.error('Transaction failed:', response.error);
-  }
-});
-```
-
-Note that the socket may receive events for transactions submitted by wallets other than your own. Filter by `transactionId` if you only want to monitor specific transactions.
+The chain response can legitimately contain an empty `transactionId`: the
+gateway has accepted and executed the write, but the upstream response did not
+yet provide an explorer ID. The DTO `uniqueKey` is the durable correlation
+key, so applications should persist it rather than treating an empty ID as a
+failure.

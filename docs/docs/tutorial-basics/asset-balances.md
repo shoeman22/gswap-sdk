@@ -4,50 +4,26 @@ sidebar_position: 2
 
 # Asset Balances
 
-Learn how to fetch asset (token) balances using the gSwap SDK.
-
-## Prerequisites
-
-Make sure you've completed the [Getting Started](../getting-started.md) guide and have your SDK properly configured.
-
-## Fetching User Assets
-
-Use the `getUserAssets()` method to retrieve all tokens owned by a wallet:
+`getUserAssets` reads the backend's user-assets endpoint. It is public and
+does not require a signer.
 
 ```typescript
-import { GSwap } from '@gala-chain/gswap-sdk';
+const assets = await gSwap.assets.getUserAssets('client|635f048ab243d7eb7f5ba044');
 
-const gSwap = new GSwap();
-
-// Get wallet's token balances
-const assets = await gSwap.assets.getUserAssets(
-  'eth|6cd13b1c31B4E489788F61f2dbf854509D608F42', // wallet address
-  1, // page number (optional, default: 1)
-  20, // limit per page (optional, default: 10)
-);
-
-console.log(`Wallet has ${assets.count} different tokens`);
-
-// Display each token
-assets.tokens.forEach((token) => {
-  console.log(`${token.symbol}: ${token.quantity} (${token.name})`);
-  console.log(`  Decimals: ${token.decimals}`);
-  console.log(`  Image: ${token.image}`);
-});
+for (const asset of assets.tokens) {
+  console.log(`${asset.symbol}: ${asset.quantity} (${asset.decimals} decimals)`);
+}
+console.log(`Token count: ${assets.count}`);
 ```
 
-## Pagination
-
-For users with many tokens, use pagination to manage large result sets:
+The `owner` may be a native `client|...` alias or a bare `eth|...` alias. The
+method retains pagination options when a wallet has many assets:
 
 ```typescript
-const page1 = await gSwap.assets.getUserAssets(userAddress, 1, 10);
-const page2 = await gSwap.assets.getUserAssets(userAddress, 2, 10);
-
-...
+const firstPage = await gSwap.assets.getUserAssets(owner, 1, 20);
+const nextPage = await gSwap.assets.getUserAssets(owner, 2, 20);
 ```
 
-## Next Steps
-
-- **[Swapping](./trading.md)**: Learn how to execute token swaps
-- **[Liquidity Management](./liquidity-management.md)**: Add and remove liquidity from pools
+Balances are useful for choosing a deposit side before calling
+`positions.estimateAddLiquidity`. They do not reserve funds; a subsequent
+write still has to pass the chain's balance checks.

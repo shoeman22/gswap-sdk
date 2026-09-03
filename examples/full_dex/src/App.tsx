@@ -14,7 +14,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/swap" replace />} />
             <Route path="/swap" element={<SwapPage />} />
-            M<Route path="/liquidity" element={<LiquidityPage />} />
+            <Route path="/liquidity" element={<LiquidityPage />} />
           </Routes>
         </div>
       </Router>

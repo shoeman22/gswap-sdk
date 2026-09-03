@@ -66,7 +66,7 @@ const quote1 = await gSwap.quoting.quoteExactInput(
   'GALA|Unit|none|none',
   'GUSDC|Unit|none|none',
   '100', // Small trade
-  FEE_TIER.PERCENT_01_00,
+  10000,
 );
 // Result: Low price impact, good execution
 
@@ -75,7 +75,7 @@ const quote2 = await gSwap.quoting.quoteExactInput(
   'GALA|Unit|none|none',
   'GUSDC|Unit|none|none',
   '1000000', // Large trade
-  FEE_TIER.PERCENT_01_00,
+  10000,
 );
 // Result: Higher price impact as it moves through different liquidity zones
 ```
@@ -107,7 +107,7 @@ for (const size of tradeSizes) {
     'GALA|Unit|none|none',
     'GUSDC|Unit|none|none',
     size,
-    FEE_TIER.PERCENT_01_00,
+    10000,
   );
 
   const impactPercent = quote.priceImpact.multipliedBy(100).toNumber();

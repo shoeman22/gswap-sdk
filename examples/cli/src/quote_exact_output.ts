@@ -1,18 +1,15 @@
-import {
-  FEE_TIER,
-  GSwap,
-  type GalaChainTokenClassKey,
-  type NumericAmount,
-} from '@gala-chain/gswap-sdk';
+import { createReadClient, parseFee } from './client.js';
 
+/** Gets the best or requested v2 quote for buying an exact output amount. */
 export async function quoteExactOutput(
-  tokenIn: GalaChainTokenClassKey | string, // The token you are selling
-  tokenOut: GalaChainTokenClassKey | string, // The token you are buying
-  outAmount: NumericAmount, // The amount of tokenOut you want to receive
-  fee?: FEE_TIER, // The fee tier of the pool. If not specified, will use the best available pool.
-) {
-  const gSwap = new GSwap({});
-
-  const quote = await gSwap.quoting.quoteExactOutput(tokenIn, tokenOut, outAmount, fee);
-  return quote;
+  tokenIn: string,
+  tokenOut: string,
+  amountOut: string,
+  feeText?: string,
+): Promise<unknown> {
+  const fee = parseFee(feeText);
+  const client = createReadClient();
+  return fee === undefined
+    ? client.quoting.quoteExactOutput(tokenIn, tokenOut, amountOut)
+    : client.quoting.quoteExactOutput(tokenIn, tokenOut, amountOut, fee);
 }

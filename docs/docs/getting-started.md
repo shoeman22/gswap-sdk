@@ -4,106 +4,82 @@ sidebar_position: 2
 
 # Getting Started
 
-This guide will help you get started with integrating gSwap into your applications.
-
-## Installation
-
-Install the gSwap SDK using npm:
+## Install
 
 ```bash
 npm install @gala-chain/gswap-sdk
 ```
 
-## Node.js Setup
+The v2 SDK supports Node.js and browser bundlers. For a server application,
+use `PrivateKeySigner`; for Gala Wallet use `GalaWalletSigner`; for an
+EIP-1193 provider such as MetaMask use `BrowserWalletSigner`.
 
-For server-side applications, use the `PrivateKeySigner` with a GalaChain private key:
+## Configure an environment
+
+`env: 'stage'` selects the public testnet Chain Gateway and staging backend.
+`env: 'prod'` selects the mainnet endpoints. Individual
+`gatewayBaseUrl` and `dexBackendBaseUrl` options override the presets, which is
+useful for tests and private deployments.
 
 ```typescript
 import { GSwap, PrivateKeySigner } from '@gala-chain/gswap-sdk';
 
-const signer = new PrivateKeySigner('your-private-key-here');
-
-const gSwap = new GSwap({ signer });
-
-// Example: Get a price quote (automatically finds best pool)
-const quote = await gSwap.quoting.quoteExactInput(
-  'GALA|Unit|none|none', // Token to sell
-  'GUSDC|Unit|none|none', // Token to buy
-  '100', // Amount to sell
-);
-
-console.log(
-  `Selling 100 $GALA will get you ${quote.outTokenAmount} USDC via ${quote.feeTier} fee tier`,
-);
-
-// Example: Execute a swap using the fee tier from the quote
-const transaction = await gSwap.swaps.swap(
-  'GALA|Unit|none|none', // Token to sell
-  'GUSDC|Unit|none|none', // Token to buy
-  quote.feeTier, // Use the fee tier from the quote
-  {
-    exactIn: '100', // Sell exactly 100 $GALA
-    amountOutMinimum: quote.outTokenAmount.multipliedBy(0.98), // Accept at least 98% of the quoted amount (slippage protection)
-  },
-  'eth|123...abc', // your wallet address
-);
-
-console.log('Swap transaction initiated:', transaction);
-```
-
-:::warning Security Tip
-Never hardcode private keys in your source code! Consider using environment variables or a secrets vault service to manage sensitive information securely.
-:::
-
-## Browser Setup
-
-### Installation
-
-```bash
-npm install @gala-chain/gswap-sdk
-```
-
-You will also need `process` and `crypto` polyfills. The details will depend on your build setup, but for example with Vite you can install:
-
-```bash
-npm install vite-plugin-node-polyfills
-```
-
-And then add:
-
-```javascript
-nodePolyfills({ include: ['process', 'crypto'] });
-```
-
-To your `plugins` array in `vite.config.js`.
-
-### Signing
-
-For browser applications, use the `GalaWalletSigner` to integrate with Gala Wallet:
-
-```javascript
-import { GSwap, GalaWalletSigner } from '@gala-chain/gswap-sdk';
-
-const walletSigner = new GalaWalletSigner(address);
-const swapInstance = new GSwap({
-  signer: walletSigner,
+const gSwap = new GSwap({
+  env: 'stage',
+  signer: new PrivateKeySigner(process.env.GALACHAIN_PRIVATE_KEY!),
+  walletAddress: process.env.GALACHAIN_ADDRESS,
 });
 ```
 
-### React Example
+Keep private keys in environment variables or a secret manager. Never commit a
+key or use a production key in a test.
 
-You can find an example React application [here](https://github.com/GalaChain/gswap-sdk/tree/main/examples/full_dex).
+## Read, quote, and write
 
-### Browser Requirements
+Tokens may be a registered trading symbol (`GALA`) or a full class key
+(`GALA|Unit|none|none`). The SDK resolves symbols and canonicalizes token
+ordering for the caller. Quotes are read-only and run against the backend's
+offline v2 engine:
 
-For Gala Wallet integration to work properly:
+```typescript
+const quote = await gSwap.quoting.quoteExactInput('GALA', 'GUSDC', '100');
+console.log(quote.feeTier, quote.amountOut);
 
-1. **HTTPS Required** - Gala Wallet only injects on secure pages. For local development use tooks like ngrok or self-signed certificates.
-2. **Gala Wallet Extension** - Users need the Gala Wallet browser extension installed.
+const tx = await gSwap.swaps.swap('GALA', 'GUSDC', quote.feeTier, {
+  exactIn: '100',
+  amountOutMinimum: quote.amountOut,
+});
+console.log(tx.uniqueKey, tx.transactionId);
+```
 
-## Next Steps
+The write response is synchronous: it contains the executed result, not a
+queued bundle. `transactionId` can be `null` or an empty string when the
+indexer has not assigned one yet. `await tx.confirm()` polls the durable
+`uniqueKey` correlation record for trades, and re-reads the position for
+liquidity operations. See [Transaction Status](./tutorial-basics/transaction-status.md).
 
-Now that you have the SDK set up, explore these guides to learn more:
+## Browser setup
 
-- **[Quoting Guide](./tutorial-basics/quoting.md)** - Learn how to get price quotes
-- **[Asset Balances](./tutorial-basics/asset-balances.md)** - Learn how to check your token balances
+```typescript
+import { BrowserWalletSigner, GSwap } from '@gala-chain/gswap-sdk';
+
+const provider = window.ethereum;
+const [address] = await provider.request({ method: 'eth_requestAccounts' });
+const gSwap = new GSwap({
+  env: 'stage',
+  signer: new BrowserWalletSigner(provider, address),
+  walletAddress: address,
+});
+```
+
+`BrowserWalletSigner` uses `personal_sign`. Gala Wallet integrations should
+use `GalaWalletSigner`; current wallets use native `gala_signChainDto`, while
+older supported wallets fall back to personal-sign. See
+[Signing and Identity](./other/signing-and-identity.md).
+
+## Next steps
+
+- [Quoting](./tutorial-basics/quoting.md)
+- [Trading](./tutorial-basics/trading.md)
+- [Liquidity Management](./tutorial-basics/liquidity-management.md)
+- [Migration from 0.x](./other/migration-from-0.x.md)

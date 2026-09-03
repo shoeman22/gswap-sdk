@@ -1,16 +1,6 @@
-import { GetUserPositionsResult, GSwap } from '@gala-chain/gswap-sdk';
+import { createReadClient } from './client.js';
 
-export async function getUserPositions(address: string) {
-  const gSwap = new GSwap({});
-
-  let bookmark = '';
-  const allPositions: GetUserPositionsResult[] = [];
-
-  do {
-    const positionsResult = await gSwap.positions.getUserPositions(address);
-    bookmark = positionsResult.bookmark;
-    allPositions.push(...positionsResult.positions);
-  } while (bookmark);
-
-  return allPositions;
+/** Reads all v2 liquidity positions for an alias. */
+export async function getUserPositions(owner: string): Promise<unknown> {
+  return createReadClient().positions.getUserPositions(owner);
 }
