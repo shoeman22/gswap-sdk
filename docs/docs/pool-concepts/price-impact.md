@@ -82,18 +82,17 @@ const tradeSize = '100';
 const numTrades = 10;
 
 for (let i = 0; i < numTrades; i++) {
-  const pendingTx = await gSwap.swaps.swap(
+  const tx = await gSwap.swaps.swap(
     'GALA|Unit|none|none',
     'GUSDC|Unit|none|none',
-    FEE_TIER.PERCENT_01_00,
+    10000,
     {
       exactIn: tradeSize,
       amountOutMinimum: calculateMinimum(tradeSize),
     },
-    walletAddress,
   );
 
-  await pendingTx.wait();
+  await tx.confirm();
 
   // Wait for potential arbitrage to restore price
   await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -122,10 +121,9 @@ const quote = await gSwap.quoting.quoteExactInput(
 );
 
 console.log(`Best fee tier: ${quote.feeTier}`);
-console.log(`Current price: ${quote.currentPrice.toString()} USDC per $GALA`);
-console.log(`New price after trade: ${quote.newPrice.toString()} USDC per $GALA`);
-console.log(`Expected output: ${quote.outTokenAmount.toString()} USDC`);
-console.log(`Price impact: ${quote.priceImpact.multipliedBy(100).toFixed(2)}%`);
+console.log(`Current sqrt price: ${quote.currentSqrtPrice.toString()}`);
+console.log(`New sqrt price: ${quote.newSqrtPrice.toString()}`);
+console.log(`Expected output: ${quote.amountOut.toString()} USDC`);
 ```
 
 ## Price Impact vs Slippage

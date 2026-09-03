@@ -2,63 +2,42 @@
 sidebar_position: 1
 ---
 
-# gSwap SDK
+# gSwap SDK v2
 
-Welcome to the **gSwap SDK** documentation. This SDK provides a comprehensive TypeScript interface for interacting with the gSwap decentralized exchange on GalaChain.
+gSwap SDK v2 is a typed client for the current `GalaChainDex` contract. It
+uses trading symbols as the pool identity, resolves class keys through the
+symbol registry, and orders `token0` and `token1` with plain string ordering.
 
-## Quick Navigation
+The public surface is grouped by responsibility:
 
-🚀 **[Getting Started Guide](/docs/getting-started)** - Complete setup instructions for Node.js and browser environments.
+- `gSwap.quoting` runs read-only exact-input and exact-output simulations.
+- `gSwap.swaps` submits `Trade` DTOs.
+- `gSwap.pools` reads pools, slot0, and composite pool snapshots.
+- `gSwap.positions` reads positions and submits liquidity operations.
+- `gSwap.assets` reads user balances; `gSwap.symbols` resolves symbols.
 
-🎯 **[Tutorials](category/tutorial)** - Walk through the major SDK features.
-
-💡 **[Examples Repo](https://github.com/GalaChain/gswap-sdk/tree/main/examples)** - Complete working examples and sample projects.
-
-⚖️ **[Uniswap Comparison](/docs/uniswap-comparison)** - For developers familiar with Uniswap.
-
-📚 **[API Documentation](/docs/api/)** - Comprehensive API reference.
-
-## What is gSwap?
-
-gSwap is a high-performance decentralized exchange built on GalaChain, offering:
-
-- **Fast & Low-Cost Trading** - Near-instant transactions with minimal, consistent fees
-- **Secure** - Industry leading mitigation against MEV attacks
-- **Ease of Use** - gSwap is built on GalaChain and many blockchain concepts such as gas fees are simplified
-
-## Quick Example
+All writes go directly through the Chain Gateway. The SDK signs the DTO,
+posts it to the method-specific gateway route, and returns a
+`SubmittedTransaction` after the synchronous chain response. There is no
+bundler, socket waiter, or EIP-712 write path.
 
 ```typescript
 import { GSwap, PrivateKeySigner } from '@gala-chain/gswap-sdk';
 
 const gSwap = new GSwap({
-  signer: new PrivateKeySigner('your-private-key'),
+  env: 'stage',
+  signer: new PrivateKeySigner(process.env.GALACHAIN_PRIVATE_KEY!),
+  walletAddress: process.env.GALACHAIN_ADDRESS,
 });
 
-const USDC_SELLING_AMOUNT = 10; // Amount of USDC to sell
-
-// Quote how much $GALA you can get for 10 USDC
-const quote = await gSwap.quoting.quoteExactInput(
-  'GUSDC|Unit|none|none', // Token to sell
-  'GALA|Unit|none|none', // Token to buy
-  USDC_SELLING_AMOUNT,
-);
-
-// Execute a swap using the fee tier from the quote
-const transaction = await gSwap.swaps.swap(
-  'GUSDC|Unit|none|none', // Token to sell
-  'GALA|Unit|none|none', // Token to buy
-  quote.feeTier, // Use the fee tier from the quote
-  {
-    exactIn: USDC_SELLING_AMOUNT,
-    amountOutMinimum: quote.outTokenAmount.multipliedBy(0.95), // 5% slippage
-  },
-  'eth|123...abc', // your wallet address
-);
+const quote = await gSwap.quoting.quoteExactInput('GALA', 'GUSDC', '100');
+const tx = await gSwap.swaps.swap('GALA', 'GUSDC', quote.feeTier, {
+  exactIn: '100',
+  amountOutMinimum: quote.amountOut,
+});
+await tx.confirm();
 ```
 
-Ready to get started? Head over to the **[Getting Started Guide](/docs/getting-started)** for complete setup instructions!
-
-## Disclaimer
-
-This SDK is provided under the Apache License 2.0. Gala™, GalaChain™, and related marks are trademarks of Blockchain Game Partners Inc. No license to use these trademarks is granted under this license. This SDK is provided “AS IS” without warranties of any kind. Use it at your own risk. Gala Games does not endorse or guarantee any third-party use or implementation of this SDK.
+Start with [Getting Started](./getting-started.md), then follow the tutorials
+for [quoting](./tutorial-basics/quoting.md), [trading](./tutorial-basics/trading.md),
+and [liquidity management](./tutorial-basics/liquidity-management.md).

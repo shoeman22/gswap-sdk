@@ -1,4 +1,4 @@
-import { FEE_TIER, GSwap } from '@gala-chain/gswap-sdk';
+import { GSwap } from '@gala-chain/gswap-sdk';
 import React, { useEffect, useState } from 'react';
 import TokenSelector from '../components/TokenSelector';
 import { tokens } from '../data/tokens';
@@ -22,20 +22,28 @@ const SwapPage: React.FC = () => {
   const [ioMode, setIoMode] = useState<'exactInput' | 'exactOutput' | null>('exactInput');
   const [sellingAmount, setSellingAmount] = useState('');
   const [buyingAmount, setBuyingAmount] = useState('');
-  const [feeTier, setFeeTier] = useState<FEE_TIER>(FEE_TIER.PERCENT_01_00);
-  const { gSwap, walletAddress, connectWallet } = useWallet();
+  const [fee, setFee] = useState<number>(3000);
+  const { gSwap, connectWallet } = useWallet();
 
   useEffect(() => {
     async function fetchQuote() {
-      const gSwap = new GSwap();
+      const gSwap = new GSwap({ env: 'stage' });
       if (ioMode === 'exactInput') {
-        const quote = await gSwap.quoting.quoteExactInput(sellingToken, buyingToken, sellingAmount);
-        setBuyingAmount(quote.outTokenAmount.toString());
-        setFeeTier(quote.feeTier);
+        const quote = await gSwap.quoting.quoteExactInput(
+          sellingToken.collection,
+          buyingToken.collection,
+          sellingAmount,
+        );
+        setBuyingAmount(quote.amountOut.toString());
+        setFee(quote.feeTier);
       } else {
-        const quote = await gSwap.quoting.quoteExactOutput(sellingToken, buyingToken, buyingAmount);
-        setSellingAmount(quote.inTokenAmount.toString());
-        setFeeTier(quote.feeTier);
+        const quote = await gSwap.quoting.quoteExactOutput(
+          sellingToken.collection,
+          buyingToken.collection,
+          buyingAmount,
+        );
+        setSellingAmount(quote.amountIn.toString());
+        setFee(quote.feeTier);
       }
     }
 
@@ -64,17 +72,14 @@ const SwapPage: React.FC = () => {
       const modeParams =
         ioMode === 'exactInput' ? { exactIn: sellingAmount } : { exactOut: buyingAmount };
 
-      const result = await gSwap!.swaps.swap(
-        sellingToken,
-        buyingToken,
-        feeTier,
-        {
-          ...modeParams,
-        },
-        walletAddress!,
+      const result = await gSwap.swaps.swap(
+        sellingToken.collection,
+        buyingToken.collection,
+        fee,
+        modeParams,
       );
 
-      await result.wait();
+      await result.confirm();
 
       alert('Swap complete!');
     } catch (error) {

@@ -37,7 +37,9 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
             // Create a new GSwap instance with a proper wallet signer
             const walletSigner = new GalaWalletSigner(address);
             const swapInstance = new GSwap({
+              env: 'stage',
               signer: walletSigner,
+              walletAddress: address,
             });
             setGSwap(swapInstance);
           }
@@ -62,16 +64,6 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
 
     connectWallet();
   }, []);
-
-  useEffect(() => {
-    async function connect() {
-      GSwap.events.connectEventSocket();
-    }
-
-    connect();
-
-    return () => GSwap.events.disconnectEventSocket();
-  });
 
   const value = {
     connectWallet,

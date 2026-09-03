@@ -63,15 +63,14 @@ This is a negative outcome and is why slippage protection is important.
 When selling a specific amount, set `amountOutMinimum` to protect against excessive slippage:
 
 ```typescript
-const pendingTx = await gSwap.swaps.swap(
+const tx = await gSwap.swaps.swap(
   'GALA|Unit|none|none',
   'GUSDC|Unit|none|none',
-  FEE_TIER.PERCENT_01_00,
+  10000,
   {
     exactIn: '100', // Sell exactly 100 $GALA
     amountOutMinimum: '47.5', // We'll accept as little as 47.5 USDC (5% slippage tolerance from our expected 50 USDC)
   },
-  walletAddress,
 );
 ```
 
@@ -86,15 +85,14 @@ Unlike most DEXs, there is no gas fee on gSwap for failed swaps, including those
 When buying a specific amount, set `amountInMaximum` to limit how much you're willing to pay:
 
 ```typescript
-const pendingTx = await gSwap.swaps.swap(
+const tx = await gSwap.swaps.swap(
   'GALA|Unit|none|none',
   'GUSDC|Unit|none|none',
-  FEE_TIER.PERCENT_01_00,
+  10000,
   {
     exactOut: '50', // Buy exactly 50 USDC
     amountInMaximum: '105', // Pay maximum 105 $GALA (5% slippage tolerance compared to our expected 100 $GALA)
   },
-  walletAddress,
 );
 ```
 
@@ -137,10 +135,10 @@ const quote = await gSwap.quoting.quoteExactInput(
 
 // Calculate slippage protection based on quote
 const slippageTolerance = 0.01; // 1%
-const amountOutMinimum = quote.outTokenAmount.multipliedBy(1 - slippageTolerance).toString();
+const amountOutMinimum = quote.amountOut.multipliedBy(1 - slippageTolerance).toString();
 
 // Execute with slippage protection
-const pendingTx = await gSwap.swaps.swap(
+const tx = await gSwap.swaps.swap(
   'GALA|Unit|none|none',
   'GUSDC|Unit|none|none',
   quote.feeTier,
@@ -148,7 +146,6 @@ const pendingTx = await gSwap.swaps.swap(
     exactIn: '100',
     amountOutMinimum,
   },
-  walletAddress,
 );
 ```
 
