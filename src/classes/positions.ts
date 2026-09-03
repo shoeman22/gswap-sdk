@@ -1,755 +1,576 @@
 import BigNumber from 'bignumber.js';
-import { NumericAmount, PriceIn } from '../types/amounts.js';
-import { FEE_TIER } from '../types/fees.js';
-import type { GetPositionResult, GetUserPositionsResult } from '../types/sdk_results.js';
-import type { GalaChainTokenClassKey } from '../types/token.js';
-import { getTokenOrdering, parseTokenClassKey, stringifyTokenClassKey } from '../utils/token.js';
-import {
-  validateFee,
-  validateNumericAmount,
-  validatePriceValues,
-  validateTickRange,
-  validateTickSpacing,
-  validateTokenDecimals,
-  validateWalletAddress,
-} from '../utils/validation.js';
-import { Bundler } from './bundler.js';
+import { GSwapSDKError } from './gswap_sdk_error.js';
+import type { ChainGateway } from './gateway.js';
 import { HttpClient } from './http_client.js';
-import { Pools } from './pools.js';
+import type { GalaChainSigner } from './signers.js';
+import { Symbols } from './symbols.js';
+import type { NumericAmount, PriceIn } from '../types/amounts.js';
+import type { FEE_TIER } from '../types/fees.js';
+import type {
+  AddLiquidityDTO,
+  CollectPositionFeesDTO,
+  CreatePoolDTO,
+  RemoveLiquidityDTO,
+} from '../types/v2_dtos.js';
+import type {
+  AddLiquidityEstimate,
+  Position,
+  RemoveLiquidityEstimate,
+} from '../types/v2_results.js';
+import { type TokenRef, compositeKeyOf, parseTokenClassKey } from '../utils/ordering.js';
+import { validateNumericAmount } from '../utils/validation.js';
+import { alignTickDown, alignTickUp, assertTickRange, tickFromPrice } from '../utils/ticks.js';
+
+interface PositionOptions {
+  signer?: GalaChainSigner;
+  walletAddress?: string;
+}
+
+interface ResolvedEnvironment {
+  gatewayBaseUrl: string;
+  dexContractBasePath: string;
+  tokenContractBasePath: string;
+  dexBackendBaseUrl: string;
+}
+
+interface BackendEnvelope<TData> {
+  data: TData;
+}
+
+interface PositionWire {
+  token0Symbol: string;
+  token1Symbol: string;
+  fee: number;
+  tickLower: number;
+  tickUpper: number;
+  liquidity: string;
+  amount0: string;
+  amount1: string;
+  inRange: boolean;
+  owner: string;
+  currentTick?: number;
+  sqrtPrice?: string;
+  pool?: string;
+  poolRef?: string;
+  fees0?: string;
+  fees1?: string;
+}
+
+interface AddLiquidityEstimateWire {
+  amount0: string;
+  amount1: string;
+  liquidity: string;
+  token0Symbol: string;
+  token1Symbol: string;
+  tickLower: number;
+  tickUpper: number;
+  amountIsCanonicalToken0: boolean;
+}
+
+interface RemoveLiquidityEstimateWire {
+  amount0: string;
+  amount1: string;
+}
+
+interface ResolvedCreateToken {
+  symbol: string;
+  classKey: ReturnType<typeof parseTokenClassKey>;
+}
 
 /**
- * Handles position management operations for liquidity positions.
+ * Manages current-contract concentrated-liquidity positions.
+ *
+ * @example
+ * ```typescript
+ * const positions = gSwap.positions;
+ * const mine = await positions.getUserPositions('client|012345678901234567890123');
+ * console.log(mine.length);
+ * ```
  */
 export class Positions {
-  private readonly httpClient: HttpClient;
-  private readonly bundlerService: Bundler;
-  private readonly poolService: Pools;
-
   constructor(
-    private readonly gatewayBaseUrl: string,
-    private readonly dexContractBasePath: string,
-    bundlerService: Bundler,
-    poolService: Pools,
-    httpClient: HttpClient,
-    private readonly options?: {
-      walletAddress?: string | undefined; // Optional default wallet address for operations
-    },
-  ) {
-    this.httpClient = httpClient;
-    this.bundlerService = bundlerService;
-    this.poolService = poolService;
-  }
+    private readonly gateway: ChainGateway,
+    private readonly symbols: Symbols,
+    private readonly http: HttpClient,
+    private readonly urls: ResolvedEnvironment,
+    private readonly options: PositionOptions = {},
+  ) {}
 
   /**
-   * Get all liquidity positions for a specific wallet address.
-   * @param ownerAddress - The wallet address to get positions for.
-   * @param limit - Maximum number of positions to return.
-   * @param bookmark - Pagination bookmark for retrieving additional results. If you call this function and it returns a bookmark that is not an empty string, you can pass that bookmark as this parameter in a subsequent call to fetch the next page.
-   * @returns User positions and pagination bookmark
+   * Gets all current-contract positions owned by an address.
+   *
+   * @param owner - GalaChain owner identity.
+   * @returns Enriched positions from the v2 trade backend.
    * @example
    * ```typescript
-   * const positions = await gSwap.positions.getUserPositions('eth|123...abc');
-   * console.log(positions);
+   * const positions = await gSwap.positions.getUserPositions('client|012345678901234567890123');
    * ```
    */
-  async getUserPositions(ownerAddress: string, limit?: number, bookmark?: string) {
-    const results = await this.sendUserPositionsRequest('/GetUserPositions', {
-      user: ownerAddress,
-      limit,
-      bookmark,
-    });
-
-    return {
-      bookmark: results.nextBookMark,
-      positions: results.positions,
-    };
+  async getUserPositions(owner: string): Promise<Position[]> {
+    const response = await this.get<PositionWire[]>('/positions', { user: owner });
+    return response.data.map((position) => this.mapPosition(position));
   }
 
   /**
-   * Gets detailed information about a specific liquidity position.
-   * @param ownerAddress - The wallet address that owns the position.
-   * @param position - Position parameters including tokens, fee, and tick range.
-   * @param position.token0ClassKey - The first token in the position.
-   * @param position.token1ClassKey - The second token in the position.
-   * @param position.fee - The pool fee tier.
-   * @param position.tickLower - The lower tick of the position range.
-   * @param position.tickUpper - The upper tick of the position range.
-   * @returns Detailed position information.
+   * Gets one position, normalizing a caller-supplied reversed pair to canonical symbol order.
+   * Reversed pairs also invert the price axis, so `[lower, upper]` becomes `[-upper, -lower]`.
+   *
+   * @param args - Pair, owner, fee, and position tick range.
+   * @returns The position, or `null` when the backend returns 404.
    * @example
    * ```typescript
-   * const position = await gSwap.positions.getPosition('eth|123...abc', {
-   *   token0ClassKey: 'GALA|Unit|none|none',
-   *   token1ClassKey: 'GUSDC|Unit|none|none',
-   *   fee: 500,
-   *   tickLower: -6000,
-   *   tickUpper: 6000
+   * const position = await gSwap.positions.getPosition({
+   *   token0: 'GALA', token1: 'GUSDC', owner: 'client|012345678901234567890123',
+   *   fee: 3000, tickLower: -19200, tickUpper: 12000,
    * });
-   * console.log('Position:', position);
    * ```
    */
-  async getPosition(
-    ownerAddress: string,
-    position: {
-      token0ClassKey: GalaChainTokenClassKey | string;
-      token1ClassKey: GalaChainTokenClassKey | string;
-      fee: number;
-      tickLower: number;
-      tickUpper: number;
-    },
-  ) {
-    const result = await this.sendPositionRequest('/GetPositions', {
-      owner: ownerAddress,
-      token0: parseTokenClassKey(position.token0ClassKey),
-      token1: parseTokenClassKey(position.token1ClassKey),
-      fee: position.fee,
-      tickLower: position.tickLower,
-      tickUpper: position.tickUpper,
+  async getPosition(args: {
+    token0: TokenRef;
+    token1: TokenRef;
+    fee: number;
+    owner: string;
+    tickLower: number;
+    tickUpper: number;
+  }): Promise<Position | null> {
+    const pair = await this.symbols.orderPair(args.token0, args.token1);
+    const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
+    const response = await this.getNullable<PositionWire>('/position', {
+      token0: pair.token0.symbol,
+      token1: pair.token1.symbol,
+      fee: `${args.fee}`,
+      owner: args.owner,
+      tickLower: `${ticks.tickLower}`,
+      tickUpper: `${ticks.tickUpper}`,
     });
-
-    return result;
+    return response === null ? null : this.mapPosition(response.data);
   }
 
   /**
-   * Estimates the token amounts that would be received from removing liquidity from a position.
-   * @param args - Parameters for estimating liquidity removal.
-   * @param args.ownerAddress - The wallet address that owns the position.
-   * @param args.positionId - The position identifier.
-   * @param args.token0 - The first token in the pair.
-   * @param args.token1 - The second token in the pair.
-   * @param args.fee - The pool fee tier.
-   * @param args.tickLower - The lower tick of the position range.
-   * @param args.tickUpper - The upper tick of the position range.
-   * @param args.amount - The amount of liquidity to remove.
-   * @returns Estimated token amounts that would be received.
+   * Estimates the other token amount and resulting liquidity for a deposit.
+   *
+   * @param args - Pair, tick range, deposit amount, and the amount's caller-side token index.
+   * @returns Backend liquidity estimate.
    * @example
    * ```typescript
-   * const estimation = await gSwap.positions.estimateRemoveLiquidity({
-   *   ownerAddress: 'client|635f048ab243d7eb7f5ba044',
-   *   positionId: '210f8e4dd1bbe1b4af4b977330ee7e4b68bc716f66e39c87a60fff0976ded3ea',
-   *   token0: 'GALA|Unit|none|none',
-   *   token1: 'GUSDT|Unit|none|none',
-   *   fee: 3000,
-   *   tickLower: -41100,
-   *   tickUpper: -40080,
-   *   amount: '1491.973332758921980256'
+   * const estimate = await gSwap.positions.estimateAddLiquidity({
+   *   token0: 'GALA', token1: 'GUSDC', fee: 3000,
+   *   tickLower: -19200, tickUpper: 12000, amount: '100', amountIsToken0: true,
    * });
-   * console.log('Estimated tokens:', estimation);
+   * ```
+   */
+  async estimateAddLiquidity(args: {
+    token0: TokenRef;
+    token1: TokenRef;
+    fee: number;
+    tickLower: number;
+    tickUpper: number;
+    amount: NumericAmount;
+    amountIsToken0: boolean;
+  }): Promise<AddLiquidityEstimate> {
+    validateNumericAmount(args.amount, 'amount');
+    const response = await this.get<AddLiquidityEstimateWire>('/add-liq-estimate', {
+      token0: this.requestToken(args.token0),
+      token1: this.requestToken(args.token1),
+      fee: `${args.fee}`,
+      tickLower: `${args.tickLower}`,
+      tickUpper: `${args.tickUpper}`,
+      amount: new BigNumber(args.amount).toFixed(),
+      amountIsToken0: `${args.amountIsToken0}`,
+    });
+    return response.data;
+  }
+
+  /**
+   * Estimates token amounts released by burning liquidity.
+   *
+   * @param args - Pair, tick range, fee tier, and liquidity quantity.
+   * @returns Estimated token0 and token1 quantities.
+   * @example
+   * ```typescript
+   * const estimate = await gSwap.positions.estimateRemoveLiquidity({
+   *   token0: 'GALA', token1: 'GUSDC', fee: 3000,
+   *   tickLower: -19200, tickUpper: 12000, liquidity: '1000',
+   * });
    * ```
    */
   async estimateRemoveLiquidity(args: {
-    ownerAddress: string;
-    positionId: string;
-    token0: GalaChainTokenClassKey | string;
-    token1: GalaChainTokenClassKey | string;
+    token0: TokenRef;
+    token1: TokenRef;
     fee: number;
     tickLower: number;
     tickUpper: number;
-    amount: NumericAmount;
-  }) {
-    validateWalletAddress(args.ownerAddress);
-    validateFee(args.fee);
-    validateTickRange(args.tickLower, args.tickUpper);
-    validateNumericAmount(args.amount, 'amount');
-
-    const token0TokenClassKey = parseTokenClassKey(args.token0);
-    const token1TokenClassKey = parseTokenClassKey(args.token1);
-
-    const ordering = getTokenOrdering(token0TokenClassKey, token1TokenClassKey, false);
-
-    const responseBody = await this.httpClient.sendPostRequest<{
-      Status: number;
-      Data: {
-        amount0: string;
-        amount1: string;
-      };
-    }>(this.gatewayBaseUrl, this.dexContractBasePath, '/GetRemoveLiquidityEstimation', {
-      tickLower: args.tickLower,
-      tickUpper: args.tickUpper,
-      amount: BigNumber(args.amount).toFixed(),
-      token0: ordering.token0,
-      token1: ordering.token1,
-      fee: args.fee,
-      owner: args.ownerAddress,
-      positionId: args.positionId,
+    liquidity: NumericAmount;
+  }): Promise<RemoveLiquidityEstimate> {
+    validateNumericAmount(args.liquidity, 'liquidity');
+    const response = await this.get<RemoveLiquidityEstimateWire>('/remove-liq-estimate', {
+      token0: this.requestToken(args.token0),
+      token1: this.requestToken(args.token1),
+      fee: `${args.fee}`,
+      tickLower: `${args.tickLower}`,
+      tickUpper: `${args.tickUpper}`,
+      liquidity: new BigNumber(args.liquidity).toFixed(),
     });
-
-    return {
-      amount0: BigNumber(responseBody.Data.amount0),
-      amount1: BigNumber(responseBody.Data.amount1),
-    };
+    return response.data;
   }
 
   /**
-   * Gets detailed information about a liquidity position by its ID.
-   * @param ownerAddress - The wallet address that owns the position.
-   * @param positionId - The unique identifier of the position.
-   * @returns Detailed position information, or undefined if not found.
+   * Adds liquidity using an explicit tick range. Exactly one canonical deposit field is emitted.
+   *
+   * @param args - Pair, fee, range, deposit amount, and caller-side token index.
+   * @returns The synchronously submitted transaction.
    * @example
    * ```typescript
-   * const position = await gSwap.positions.getPositionById('eth|123...abc', 'position-uuid-123');
-   * if (position) {
-   *   console.log('Position found:', position);
-   * } else {
-   *   console.log('Position not found');
-   * }
-   * ```
-   */
-  async getPositionById(ownerAddress: string, positionId: string) {
-    const userPositions = await this.getUserPositions(ownerAddress);
-    const position = userPositions.positions.find((pos) => pos.positionId === positionId);
-    if (!position) {
-      return undefined;
-    }
-
-    return this.getPosition(ownerAddress, position);
-  }
-
-  /**
-   * Creates a new position or adds liquidity to a position, using a specific tick range. Consider using `addLiquidityByPrice()` instead unless you want to use ticks directly.
-   * @param args - Parameters for adding liquidity.
-   * @param args.walletAddress - The wallet address adding liquidity.
-   * @param args.positionId - The position identifier. If you're creating a new position, this should be an empty string.
-   * @param args.token0 - The first token in the pair.
-   * @param args.token1 - The second token in the pair.
-   * @param args.fee - The pool fee tier.
-   * @param args.tickLower - The lower tick of the position range.
-   * @param args.tickUpper - The upper tick of the position range.
-   * @param args.amount0Desired - Desired (also maximum) amount of token0 to add.
-   * @param args.amount1Desired - Desired (also maximum) amount of token1 to add.
-   * @param args.amount0Min - Minimum amount of token0 to add (slippage protection).
-   * @param args.amount1Min - Minimum amount of token1 to add (slippage protection).
-   * @returns Pending transaction.
-   * @example
-   * ```typescript
-   * const result = await gSwap.positions.addLiquidityByTicks({
-   *   walletAddress: 'eth|123...abc',
-   *   positionId: '',
-   *   token0: 'GALA|Unit|none|none',
-   *   token1: 'GUSDC|Unit|none|none',
-   *   fee: 500,
-   *   tickSpacing: 10,
-   *   tickLower: -6000,
-   *   tickUpper: 6000,
-   *   amount0Desired: '100',
-   *   amount1Desired: '50',
-   *   amount0Min: '95',
-   *   amount1Min: '47.5'
+   * const tx = await gSwap.positions.addLiquidityByTicks({
+   *   token0: 'GALA', token1: 'GUSDC', fee: 3000,
+   *   tickLower: -19200, tickUpper: 12000, amount: '100', amountIsToken0: true,
    * });
-   * console.log('Liquidity added:', result);
+   * await tx.confirm();
    * ```
    */
   async addLiquidityByTicks(args: {
-    walletAddress?: string;
-    positionId: string;
-    token0: GalaChainTokenClassKey | string;
-    token1: GalaChainTokenClassKey | string;
-    fee: FEE_TIER;
-    tickLower: number;
-    tickUpper: number;
-    amount0Desired: NumericAmount;
-    amount1Desired: NumericAmount;
-    amount0Min: NumericAmount;
-    amount1Min: NumericAmount;
-  }) {
-    const walletAddress = args.walletAddress ?? this.options?.walletAddress;
-
-    validateWalletAddress(walletAddress);
-    validateFee(args.fee);
-    validateTickRange(args.tickLower, args.tickUpper);
-    validateNumericAmount(args.amount0Desired, 'amount0Desired', true);
-    validateNumericAmount(args.amount1Desired, 'amount1Desired', true);
-    validateNumericAmount(args.amount0Min, 'amount0Min', true);
-    validateNumericAmount(args.amount1Min, 'amount1Min', true);
-
-    const token0TokenClassKey = parseTokenClassKey(args.token0);
-    const token1TokenClassKey = parseTokenClassKey(args.token1);
-
-    const ordering = getTokenOrdering(
-      token0TokenClassKey,
-      token1TokenClassKey,
-      true,
-      [args.amount0Desired, args.amount0Min],
-      [args.amount1Desired, args.amount1Min],
-    );
-
-    const toSign = {
-      token0: ordering.token0,
-      token1: ordering.token1,
-      fee: args.fee,
-      owner: args.walletAddress,
-      tickLower: args.tickLower,
-      tickUpper: args.tickUpper,
-      amount0Desired: BigNumber(ordering!.token0Attributes![0]!).toFixed(),
-      amount1Desired: BigNumber(ordering!.token1Attributes![0]!).toFixed(),
-      amount0Min: BigNumber(ordering!.token0Attributes![1]!).toFixed(),
-      amount1Min: BigNumber(ordering!.token1Attributes![1]!).toFixed(),
-      positionId: args.positionId,
-      liquidityProvider: args.walletAddress,
-    };
-
-    const token0StringKey = stringifyTokenClassKey(ordering.token0, '$');
-    const token1StringKey = stringifyTokenClassKey(ordering.token1, '$');
-
-    const poolString = `$pool$${token0StringKey}$${token1StringKey}$${args.fee}`;
-    const userPositionString = `$userPosition$${args.walletAddress}`;
-    const tokenBalance0 = `$tokenBalance$${token0StringKey}$${args.walletAddress}`;
-    const tokenBalance1 = `$tokenBalance$${token1StringKey}$${args.walletAddress}`;
-    const tokenBalance0Pool = `$tokenBalance$${token0StringKey}$${poolString}`;
-    const tokenBalance1Pool = `$tokenBalance$${token1StringKey}$${poolString}`;
-
-    const stringsInstructions = [
-      poolString,
-      userPositionString,
-      tokenBalance0,
-      tokenBalance1,
-      tokenBalance0Pool,
-      tokenBalance1Pool,
-    ];
-
-    return this.bundlerService.sendBundlerRequest('AddLiquidity', toSign, stringsInstructions);
-  }
-
-  /**
-   * Creates a new position or adds liquidity to a position, using a specified price range. Note that this method automatically converts your minPrice and maxPrice to ticks, rounding down if necessary.
-   * @param args - Parameters for adding liquidity.
-   * @param args.walletAddress - The wallet address adding liquidity.
-   * @param args.positionId - The position identifier. This should be an empty string if you are creating a new position.
-   * @param args.token0 - The first token in the pair.
-   * @param args.token1 - The second token in the pair.
-   * @param args.fee - The pool fee tier.
-   * @param args.tickSpacing - The tick spacing for the pool.
-   * @param args.minPrice - The minimum price for the position range.
-   * @param args.maxPrice - The maximum price for the position range.
-   * @param args.amount0Desired - Desired (also maximum) amount of token0 to add.
-   * @param args.amount1Desired - Desired (also maximum) amount of token1 to add.
-   * @param args.amount0Min - Minimum amount of token0 to add (slippage protection).
-   * @param args.amount1Min - Minimum amount of token1 to add (slippage protection).
-   * @returns Pending transaction.
-   * @example
-   * ```typescript
-   * const result = await gSwap.positions.addLiquidityByPrice({
-   *   walletAddress: 'eth|123...abc',
-   *   positionId: '',
-   *   token0: 'GALA|Unit|none|none',
-   *   token1: 'GUSDC|Unit|none|none',
-   *   fee: 500,
-   *   tickSpacing: 10,
-   *   minPrice: '0.45',
-   *   maxPrice: '0.55',
-   *   amount0Desired: '100',
-   *   amount1Desired: '50',
-   *   amount0Min: '95',
-   *   amount1Min: '47.5'
-   * });
-   * console.log('Liquidity added with price range:', result);
-   * ```
-   */
-  async addLiquidityByPrice(args: {
-    walletAddress?: string;
-    positionId: string;
-    token0: GalaChainTokenClassKey | string;
-    token1: GalaChainTokenClassKey | string;
-    fee: number;
-    tickSpacing: number;
-    minPrice: PriceIn;
-    maxPrice: PriceIn;
-    amount0Desired: NumericAmount;
-    amount1Desired: NumericAmount;
-    amount0Min: NumericAmount;
-    amount1Min: NumericAmount;
-  }) {
-    const walletAddress = args.walletAddress ?? this.options?.walletAddress;
-
-    validateWalletAddress(walletAddress);
-    validateFee(args.fee);
-    validateTickSpacing(args.tickSpacing);
-    validateNumericAmount(args.minPrice, 'minPrice', true);
-    validateNumericAmount(args.maxPrice, 'maxPrice');
-    validateNumericAmount(args.amount0Desired, 'amount0Desired', true);
-    validateNumericAmount(args.amount1Desired, 'amount1Desired', true);
-    validateNumericAmount(args.amount0Min, 'amount0Min', true);
-    validateNumericAmount(args.amount1Min, 'amount1Min', true);
-
-    if (BigNumber(args.minPrice).isGreaterThan(BigNumber(args.maxPrice))) {
-      throw new Error('Invalid price range: minPrice must be less than or equal to maxPrice');
-    }
-
-    const token0TokenClassKey = parseTokenClassKey(args.token0);
-    const token1TokenClassKey = parseTokenClassKey(args.token1);
-
-    const ordering = getTokenOrdering(
-      token0TokenClassKey,
-      token1TokenClassKey,
-      true,
-      [args.amount0Desired, args.amount0Min],
-      [args.amount1Desired, args.amount1Min],
-    );
-
-    const minPriceTicks = this.poolService.calculateTicksForPrice(args.minPrice, args.tickSpacing);
-    const maxPriceTicks = this.poolService.calculateTicksForPrice(args.maxPrice, args.tickSpacing);
-
-    const tickLower = ordering.zeroForOne ? minPriceTicks : maxPriceTicks * -1;
-    const tickUpper = ordering.zeroForOne ? maxPriceTicks : minPriceTicks * -1;
-
-    const toSign = {
-      token0: ordering.token0,
-      token1: ordering.token1,
-      fee: args.fee,
-      owner: args.walletAddress,
-      tickLower,
-      tickUpper,
-      amount0Desired: ordering?.token0Attributes?.[0],
-      amount1Desired: ordering?.token1Attributes?.[0],
-      amount0Min: ordering?.token0Attributes?.[1],
-      amount1Min: ordering?.token1Attributes?.[1],
-      positionId: args.positionId,
-    };
-
-    const token0StringKey = stringifyTokenClassKey(ordering.token0, '$');
-    const token1StringKey = stringifyTokenClassKey(ordering.token1, '$');
-
-    const poolString = `$pool$${token0StringKey}$${token1StringKey}$${args.fee}`;
-    const userPositionString = `$userPosition$${args.walletAddress}`;
-    const tokenBalance0 = `$tokenBalance$${token0StringKey}$${args.walletAddress}`;
-    const tokenBalance1 = `$tokenBalance$${token1StringKey}$${args.walletAddress}`;
-    const tokenBalance0Pool = `$tokenBalance$${token0StringKey}$${poolString}`;
-    const tokenBalance1Pool = `$tokenBalance$${token1StringKey}$${poolString}`;
-
-    const stringsInstructions = [
-      poolString,
-      userPositionString,
-      tokenBalance0,
-      tokenBalance1,
-      tokenBalance0Pool,
-      tokenBalance1Pool,
-    ];
-
-    return this.bundlerService.sendBundlerRequest('AddLiquidity', toSign, stringsInstructions);
-  }
-
-  /**
-   * Removes liquidity from a position.
-   * @param args - Parameters for removing liquidity.
-   * @param args.walletAddress - The wallet address removing liquidity.
-   * @param args.positionId - The position identifier.
-   * @param args.token0 - The first token in the pair.
-   * @param args.token1 - The second token in the pair.
-   * @param args.fee - The pool fee tier.
-   * @param args.tickLower - The lower tick of the position range.
-   * @param args.tickUpper - The upper tick of the position range.
-   * @param args.amount - The amount of liquidity to remove.
-   * @param args.amount0Min - Minimum amount of token0 to receive (slippage protection, optional).
-   * @param args.amount1Min - Minimum amount of token1 to receive (slippage protection, optional).
-   * @returns Pending transaction.
-   * @example
-   * ```typescript
-   * // Remove 50% of liquidity from a position
-   * const result = await gSwap.positions.removeLiquidity({
-   *   walletAddress: 'eth|123...abc',
-   *   positionId: 'position-123',
-   *   token0: 'GALA|Unit|none|none',
-   *   token1: 'GUSDC|Unit|none|none',
-   *   fee: 500,
-   *   tickLower: -6000,
-   *   tickUpper: 6000,
-   *   amount: '50000000000000000000', // 50% of position liquidity
-   *   amount0Min: '45',
-   *   amount1Min: '22'
-   * });
-   * console.log('Liquidity removed:', result);
-   * ```
-   */
-  async removeLiquidity(args: {
-    walletAddress?: string;
-    positionId: string;
-    token0: GalaChainTokenClassKey | string;
-    token1: GalaChainTokenClassKey | string;
+    token0: TokenRef;
+    token1: TokenRef;
     fee: number;
     tickLower: number;
     tickUpper: number;
     amount: NumericAmount;
-    amount0Min?: NumericAmount;
-    amount1Min?: NumericAmount;
+    amountIsToken0: boolean;
   }) {
-    const walletAddress = args.walletAddress ?? this.options?.walletAddress;
-
-    validateWalletAddress(walletAddress);
-    validateFee(args.fee);
-    validateTickRange(args.tickLower, args.tickUpper);
+    const pair = await this.symbols.orderPair(args.token0, args.token1);
+    const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
+    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee as FEE_TIER);
     validateNumericAmount(args.amount, 'amount');
-
-    if (args.amount0Min !== undefined) {
-      validateNumericAmount(args.amount0Min, 'amount0Min', true);
-    }
-    if (args.amount1Min !== undefined) {
-      validateNumericAmount(args.amount1Min, 'amount1Min', true);
-    }
-
-    const token0TokenClassKey = parseTokenClassKey(args.token0);
-    const token1TokenClassKey = parseTokenClassKey(args.token1);
-
-    const ordering = getTokenOrdering(
-      token0TokenClassKey,
-      token1TokenClassKey,
-      true,
-      [args.amount0Min ?? 0],
-      [args.amount1Min ?? 0],
-    );
-
-    const toSign = {
-      token0: ordering.token0,
-      token1: ordering.token1,
-      fee: args.fee,
-      tickLower: args.tickLower,
-      tickUpper: args.tickUpper,
-      amount: BigNumber(args.amount).toFixed(),
-      amount0Min: ordering?.token0Attributes?.[0] || '0',
-      amount1Min: ordering?.token1Attributes?.[0] || '0',
-      positionId: args.positionId,
-      recipient: args.walletAddress,
+    const amount = new BigNumber(args.amount).toFixed();
+    const dto: AddLiquidityDTO = {
+      token0: pair.token0.symbol,
+      token1: pair.token1.symbol,
+      fee: args.fee as FEE_TIER,
+      tickLower: ticks.tickLower,
+      tickUpper: ticks.tickUpper,
+      uniqueKey: this.uniqueKey(),
+      ...(pair.flipped !== args.amountIsToken0
+        ? { depositQuantityToken0: amount }
+        : { depositQuantityToken1: amount }),
     };
-
-    const token0StringKey = stringifyTokenClassKey(ordering.token0, '$');
-    const token1StringKey = stringifyTokenClassKey(ordering.token1, '$');
-
-    const poolString = `$pool$${token0StringKey}$${token1StringKey}$${args.fee}`;
-    const userPositionString = `$userPosition$${args.walletAddress}`;
-    const tokenBalance0 = `$tokenBalance$${token0StringKey}$${args.walletAddress}`;
-    const tokenBalance1 = `$tokenBalance$${token1StringKey}$${args.walletAddress}`;
-    const tokenBalance0Pool = `$tokenBalance$${token0StringKey}$${poolString}`;
-    const tokenBalance1Pool = `$tokenBalance$${token1StringKey}$${poolString}`;
-
-    const stringsInstructions = [
-      poolString,
-      userPositionString,
-      tokenBalance0,
-      tokenBalance1,
-      tokenBalance0Pool,
-      tokenBalance1Pool,
-    ];
-
-    return this.bundlerService.sendBundlerRequest('RemoveLiquidity', toSign, stringsInstructions);
+    return this.submit('AddLiquidity', dto as unknown as Record<string, unknown>);
   }
 
   /**
-   * Collects accumulated fees from a liquidity position.
-   * @param args - Parameters for collecting fees.
-   * @param args.walletAddress - The wallet address collecting fees.
-   * @param args.positionId - The position identifier.
-   * @param args.token0 - The first token in the pair.
-   * @param args.token1 - The second token in the pair.
-   * @param args.fee - The pool fee tier.
-   * @param args.tickLower - The lower tick of the position range.
-   * @param args.tickUpper - The upper tick of the position range.
-   * @param args.amount0Requested - Desired amount of token0 fees to collect.
-   * @param args.amount1Requested - Desired amount of token1 fees to collect.
-   * @returns Pending transaction.
+   * Adds liquidity from prices, flooring the lower tick and ceiling the upper tick to fee spacing.
+   * The resulting range is therefore no narrower than the requested price interval.
+   *
+   * @param args - Pair, fee, price range, deposit amount, and caller-side token index.
+   * @returns The synchronously submitted transaction.
    * @example
    * ```typescript
-   * // Collect all accumulated fees from a position
-   * const result = await gSwap.positions.collectPositionFees({
-   *   walletAddress: 'eth|123...abc',
-   *   positionId: 'position-123',
-   *   token0: 'GALA|Unit|none|none',
-   *   token1: 'GUSDC|Unit|none|none',
-   *   fee: 500,
-   *   tickLower: -6000,
-   *   tickUpper: 6000,
-   *   amount0Requested: '1000000000000000000', // Max fees available
-   *   amount1Requested: '500000000' // Max fees available
+   * const tx = await gSwap.positions.addLiquidityByPrice({
+   *   token0: 'GALA', token1: 'GUSDC', fee: 3000,
+   *   minPrice: '0.14', maxPrice: '0.16', amount: '100', amountIsToken0: true,
    * });
-   * console.log('Fees collected:', result);
    * ```
    */
-  async collectPositionFees(args: {
-    walletAddress?: string;
-    positionId: string;
-    token0: GalaChainTokenClassKey | string;
-    token1: GalaChainTokenClassKey | string;
+  async addLiquidityByPrice(args: {
+    token0: TokenRef;
+    token1: TokenRef;
+    fee: number;
+    minPrice: PriceIn;
+    maxPrice: PriceIn;
+    amount: NumericAmount;
+    amountIsToken0: boolean;
+  }) {
+    const minPrice = new BigNumber(args.minPrice);
+    const maxPrice = new BigNumber(args.maxPrice);
+    if (
+      !minPrice.isFinite() ||
+      !maxPrice.isFinite() ||
+      minPrice.isLessThanOrEqualTo(0) ||
+      maxPrice.isLessThanOrEqualTo(0)
+    ) {
+      throw new GSwapSDKError('Price bounds must be finite and positive.', 'VALIDATION_ERROR');
+    }
+    if (minPrice.isGreaterThan(maxPrice)) {
+      throw new GSwapSDKError(
+        'minPrice must be less than or equal to maxPrice.',
+        'VALIDATION_ERROR',
+      );
+    }
+    const spacing = this.tickSpacing(args.fee);
+    const tickLower = alignTickDown(tickFromPrice(minPrice), spacing);
+    const tickUpper = alignTickUp(tickFromPrice(maxPrice), spacing);
+    return this.addLiquidityByTicks({
+      token0: args.token0,
+      token1: args.token1,
+      fee: args.fee,
+      tickLower,
+      tickUpper,
+      amount: args.amount,
+      amountIsToken0: args.amountIsToken0,
+    });
+  }
+
+  /**
+   * Removes liquidity by withdrawing at most one canonical token quantity.
+   * Omitting both amounts closes the position and sweeps all accrued fees.
+   *
+   * @param args - Pair, fee, range, and optional caller-side withdrawal amount.
+   * @returns The synchronously submitted transaction.
+   * @example
+   * ```typescript
+   * const tx = await gSwap.positions.removeLiquidity({
+   *   token0: 'GALA', token1: 'GUSDC', fee: 3000,
+   *   tickLower: -19200, tickUpper: 12000,
+   * });
+   * ```
+   */
+  async removeLiquidity(args: {
+    token0: TokenRef;
+    token1: TokenRef;
     fee: number;
     tickLower: number;
     tickUpper: number;
-    amount0Requested: NumericAmount;
-    amount1Requested: NumericAmount;
+    amount0?: NumericAmount;
+    amount1?: NumericAmount;
   }) {
-    const walletAddress = args.walletAddress ?? this.options?.walletAddress;
-
-    validateWalletAddress(walletAddress);
-    validateFee(args.fee);
-    validateTickRange(args.tickLower, args.tickUpper);
-    validateNumericAmount(args.amount0Requested, 'amount0Requested', true);
-    validateNumericAmount(args.amount1Requested, 'amount1Requested', true);
-
-    const token0TokenClassKey = parseTokenClassKey(args.token0);
-    const token1TokenClassKey = parseTokenClassKey(args.token1);
-
-    const ordering = getTokenOrdering(
-      token0TokenClassKey,
-      token1TokenClassKey,
-      true,
-      [args.amount0Requested],
-      [args.amount1Requested],
-    );
-
-    const toSign = {
-      token0: ordering.token0,
-      token1: ordering.token1,
-      fee: args.fee,
-      amount0Requested: BigNumber(ordering!.token0Attributes![0]!).toFixed(),
-      amount1Requested: BigNumber(ordering!.token1Attributes![0]!).toFixed(),
-      tickLower: args.tickLower,
-      tickUpper: args.tickUpper,
-      positionId: args.positionId,
-      recipient: args.walletAddress,
+    const pair = await this.symbols.orderPair(args.token0, args.token1);
+    const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
+    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee as FEE_TIER);
+    if (args.amount0 !== undefined && args.amount1 !== undefined) {
+      throw new GSwapSDKError('Provide at most one of amount0 or amount1.', 'VALIDATION_ERROR');
+    }
+    if (args.amount0 !== undefined) validateNumericAmount(args.amount0, 'amount0');
+    if (args.amount1 !== undefined) validateNumericAmount(args.amount1, 'amount1');
+    const withdrawal =
+      args.amount0 !== undefined
+        ? pair.flipped
+          ? { withdrawalQuantityToken1: new BigNumber(args.amount0).toFixed() }
+          : { withdrawalQuantityToken0: new BigNumber(args.amount0).toFixed() }
+        : args.amount1 !== undefined
+          ? pair.flipped
+            ? { withdrawalQuantityToken0: new BigNumber(args.amount1).toFixed() }
+            : { withdrawalQuantityToken1: new BigNumber(args.amount1).toFixed() }
+          : {};
+    const dto: RemoveLiquidityDTO = {
+      token0: pair.token0.symbol,
+      token1: pair.token1.symbol,
+      fee: args.fee as FEE_TIER,
+      tickLower: ticks.tickLower,
+      tickUpper: ticks.tickUpper,
+      uniqueKey: this.uniqueKey(),
+      ...withdrawal,
     };
-
-    const token0StringKey = stringifyTokenClassKey(ordering.token0, '$');
-    const token1StringKey = stringifyTokenClassKey(ordering.token1, '$');
-
-    const poolString = `$pool$${token0StringKey}$${token1StringKey}$${args.fee}`;
-    const userPositionString = `$userPosition$${args.walletAddress}`;
-    const tokenBalance0 = `$tokenBalance$${token0StringKey}$${args.walletAddress}`;
-    const tokenBalance1 = `$tokenBalance$${token1StringKey}$${args.walletAddress}`;
-    const tokenBalance0Pool = `$tokenBalance$${token0StringKey}$${poolString}`;
-    const tokenBalance1Pool = `$tokenBalance$${token1StringKey}$${poolString}`;
-
-    const stringsInstructions = [
-      poolString,
-      userPositionString,
-      tokenBalance0,
-      tokenBalance1,
-      tokenBalance0Pool,
-      tokenBalance1Pool,
-    ];
-
-    return this.bundlerService.sendBundlerRequest(
-      'CollectPositionFees',
-      toSign,
-      stringsInstructions,
-    );
+    return this.submit('RemoveLiquidity', dto as unknown as Record<string, unknown>);
   }
 
-  public calculateOptimalPositionSize(
-    tokenAmount: NumericAmount,
-    spotPrice: NumericAmount,
-    lowerPrice: NumericAmount,
-    upperPrice: NumericAmount,
-    tokenDecimals: number,
-    otherTokenDecimals: number,
-  ) {
-    validateNumericAmount(tokenAmount, 'tokenAmount');
-    validatePriceValues(spotPrice, lowerPrice, upperPrice);
-    validateTokenDecimals(tokenDecimals, 'tokenDecimals');
-    validateTokenDecimals(otherTokenDecimals, 'otherTokenDecimals');
-
-    const bnTokenAmount = BigNumber(tokenAmount);
-    const bnSpotPrice = BigNumber(spotPrice);
-    const bnLowerPrice = BigNumber(lowerPrice);
-    let bnUpperPrice = BigNumber(upperPrice);
-
-    bnUpperPrice = bnUpperPrice.isFinite() ? bnUpperPrice : BigNumber(1e18);
-
-    const liquidityAmount = bnTokenAmount
-      .times(10 ** (tokenDecimals - otherTokenDecimals))
-      .times(bnSpotPrice.sqrt())
-      .times(bnUpperPrice.sqrt())
-      .div(bnUpperPrice.sqrt().minus(bnSpotPrice.sqrt()));
-
-    const yAmount = BigNumber(liquidityAmount).times(bnSpotPrice.sqrt().minus(bnLowerPrice.sqrt()));
-    const untruncated = yAmount.div(BigNumber(10).pow(tokenDecimals - otherTokenDecimals));
-
-    return BigNumber.max(
-      BigNumber(untruncated.toFixed(otherTokenDecimals, BigNumber.ROUND_DOWN)),
-      0,
-    );
+  /**
+   * Collects all accrued fees for a position; the contract does not support partial collection.
+   *
+   * @param args - Pair, fee, and tick range identifying the position.
+   * @returns The synchronously submitted transaction.
+   * @example
+   * ```typescript
+   * const tx = await gSwap.positions.collectPositionFees({
+   *   token0: 'GALA', token1: 'GUSDC', fee: 3000,
+   *   tickLower: -19200, tickUpper: 12000,
+   * });
+   * ```
+   */
+  async collectPositionFees(args: {
+    token0: TokenRef;
+    token1: TokenRef;
+    fee: number;
+    tickLower: number;
+    tickUpper: number;
+  }) {
+    const pair = await this.symbols.orderPair(args.token0, args.token1);
+    const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
+    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee as FEE_TIER);
+    const dto: CollectPositionFeesDTO = {
+      token0: pair.token0.symbol,
+      token1: pair.token1.symbol,
+      fee: args.fee as FEE_TIER,
+      tickLower: ticks.tickLower,
+      tickUpper: ticks.tickUpper,
+      uniqueKey: this.uniqueKey(),
+    };
+    return this.submit('CollectPositionFees', dto as unknown as Record<string, unknown>);
   }
 
-  private async sendUserPositionsRequest(
+  /**
+   * Creates a pool, resolving registered trading symbols and falling back to class collections.
+   * Reversed symbol order inverts the supplied starting price or square-root price.
+   *
+   * @param args - Token class keys or references, fee, exactly one starting price field, and privacy options.
+   * @returns The synchronously submitted transaction.
+   * @example
+   * ```typescript
+   * const tx = await gSwap.positions.createPool({
+   *   token0: 'GALA|Unit|none|none', token1: 'GUSDC|Unit|none|none', fee: 3000,
+   *   startingPrice: '0.15',
+   * });
+   * ```
+   */
+  async createPool(args: {
+    token0: TokenRef;
+    token1: TokenRef;
+    fee: number;
+    startingPrice?: NumericAmount;
+    startingSqrtPrice?: NumericAmount;
+    isPrivate?: boolean;
+    privateAccess?: string[];
+  }) {
+    const hasPrice = args.startingPrice !== undefined;
+    const hasSqrtPrice = args.startingSqrtPrice !== undefined;
+    if (hasPrice === hasSqrtPrice) {
+      throw new GSwapSDKError(
+        'Provide exactly one of startingPrice or startingSqrtPrice.',
+        'VALIDATION_ERROR',
+      );
+    }
+    const [tokenA, tokenB] = await Promise.all([
+      this.resolveCreateToken(args.token0),
+      this.resolveCreateToken(args.token1),
+    ]);
+    const flipped = tokenA.symbol > tokenB.symbol;
+    const [token0, token1] = flipped ? [tokenB, tokenA] : [tokenA, tokenB];
+    const sourcePriceInput = args.startingPrice ?? args.startingSqrtPrice;
+    if (sourcePriceInput === undefined) {
+      throw new GSwapSDKError('A starting price is required.', 'VALIDATION_ERROR');
+    }
+    const sourcePrice = new BigNumber(sourcePriceInput);
+    if (!sourcePrice.isFinite() || sourcePrice.isLessThanOrEqualTo(0)) {
+      throw new GSwapSDKError('Starting price must be finite and positive.', 'VALIDATION_ERROR');
+    }
+    const canonicalPrice = flipped ? new BigNumber(1).dividedBy(sourcePrice) : sourcePrice;
+    const dto: CreatePoolDTO = {
+      token0Key: token0.classKey,
+      token1Key: token1.classKey,
+      token0Symbol: token0.symbol,
+      token1Symbol: token1.symbol,
+      fee: args.fee as FEE_TIER,
+      uniqueKey: this.uniqueKey(),
+      ...(hasPrice
+        ? { startingPrice: canonicalPrice.toFixed() }
+        : { startingSqrtPrice: canonicalPrice.toFixed() }),
+      ...(args.isPrivate === undefined ? {} : { isPrivate: args.isPrivate }),
+      ...(args.privateAccess === undefined ? {} : { privateAccess: args.privateAccess }),
+    };
+    return this.submit('CreatePool', dto as unknown as Record<string, unknown>);
+  }
+
+  private async submit<TDto extends Record<string, unknown>>(method: string, dto: TDto) {
+    const signer = this.options.signer;
+    if (signer === undefined) throw GSwapSDKError.noSignerError();
+    const signed = await signer.signObject(method, dto);
+    const submitOptions =
+      this.options.walletAddress === undefined ? {} : { walletAddress: this.options.walletAddress };
+    return this.gateway.submit(method, signed, submitOptions);
+  }
+
+  private async get<TData>(
     endpoint: string,
-    body: unknown,
-  ): Promise<{
-    nextBookMark: string;
-    positions: GetUserPositionsResult[];
-  }> {
-    const responseBody = await this.httpClient.sendPostRequest<{
-      Status: number;
-      Data: {
-        nextBookMark: string;
-        positions: Array<{
-          poolHash: string;
-          positionId: string;
-          token0ClassKey: {
-            additionalKey: string;
-            category: string;
-            collection: string;
-            type: string;
-          };
-          token1ClassKey: {
-            additionalKey: string;
-            category: string;
-            collection: string;
-            type: string;
-          };
-          token0Img: string;
-          token1Img: string;
-          token0Symbol: string;
-          token1Symbol: string;
-          fee: number;
-          liquidity: string;
-          tickLower: number;
-          tickUpper: number;
-          createdAt: string;
-        }>;
-      };
-    }>(this.gatewayBaseUrl, this.dexContractBasePath, endpoint, body);
+    params: Record<string, string>,
+  ): Promise<BackendEnvelope<TData>> {
+    return this.http.sendGetRequest<BackendEnvelope<TData>>(
+      this.urls.dexBackendBaseUrl,
+      '/v2/trade',
+      endpoint,
+      params,
+    );
+  }
 
-    // Convert string fields to BigNumber
+  private async getNullable<TData>(
+    endpoint: string,
+    params: Record<string, string>,
+  ): Promise<BackendEnvelope<TData> | null> {
+    try {
+      return await this.get<TData>(endpoint, params);
+    } catch (error: unknown) {
+      if (this.isNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  private isNotFound(error: unknown): boolean {
+    if (!(error instanceof GSwapSDKError) || error.details === undefined) return false;
+    return error.details.status === 404;
+  }
+
+  private mapPosition(position: PositionWire): Position {
     return {
-      nextBookMark: responseBody.Data.nextBookMark,
-      positions: responseBody.Data.positions.map((position) => ({
-        ...position,
-        liquidity: BigNumber(position.liquidity),
-      })),
+      token0Symbol: position.token0Symbol,
+      token1Symbol: position.token1Symbol,
+      fee: position.fee,
+      tickLower: position.tickLower,
+      tickUpper: position.tickUpper,
+      liquidity: position.liquidity,
+      amount0: position.amount0,
+      amount1: position.amount1,
+      inRange: position.inRange,
+      ...(position.currentTick === undefined ? {} : { currentTick: position.currentTick }),
+      ...(position.sqrtPrice === undefined ? {} : { sqrtPrice: position.sqrtPrice }),
+      pool: position.poolRef ?? position.pool ?? '',
+      owner: position.owner,
+      ...(position.fees0 === undefined ? {} : { fees0: position.fees0 }),
+      ...(position.fees1 === undefined ? {} : { fees1: position.fees1 }),
     };
   }
 
-  private async sendPositionRequest(endpoint: string, body: unknown): Promise<GetPositionResult> {
-    const responseBody = await this.httpClient.sendPostRequest<{
-      Status: number;
-      Data: {
-        fee: number;
-        feeGrowthInside0Last: string;
-        feeGrowthInside1Last: string;
-        liquidity: string;
-        poolHash: string;
-        positionId: string;
-        tickLower: number;
-        tickUpper: number;
-        token0ClassKey: {
-          additionalKey: string;
-          category: string;
-          collection: string;
-          type: string;
-        };
-        token1ClassKey: {
-          additionalKey: string;
-          category: string;
-          collection: string;
-          type: string;
-        };
-        tokensOwed0: string;
-        tokensOwed1: string;
-      };
-    }>(this.gatewayBaseUrl, this.dexContractBasePath, endpoint, body);
+  private requestToken(ref: TokenRef): string {
+    return typeof ref === 'string' ? ref : compositeKeyOf(ref);
+  }
 
-    // Convert string fields to BigNumber
-    return {
-      ...responseBody.Data,
-      feeGrowthInside0Last: BigNumber(responseBody.Data.feeGrowthInside0Last),
-      feeGrowthInside1Last: BigNumber(responseBody.Data.feeGrowthInside1Last),
-      liquidity: BigNumber(responseBody.Data.liquidity),
-      tokensOwed0: BigNumber(responseBody.Data.tokensOwed0),
-      tokensOwed1: BigNumber(responseBody.Data.tokensOwed1),
-    };
+  private canonicalTicks(tickLower: number, tickUpper: number, flipped: boolean) {
+    return flipped ? { tickLower: -tickUpper, tickUpper: -tickLower } : { tickLower, tickUpper };
+  }
+
+  private tickSpacing(fee: number): number {
+    if (fee === 0) return 200;
+    if (fee === 500) return 10;
+    if (fee === 3000) return 60;
+    if (fee === 10000) return 200;
+    throw new GSwapSDKError(`Unsupported fee tier: ${fee}.`, 'VALIDATION_ERROR');
+  }
+
+  private uniqueKey(): string {
+    return `gswap-sdk-${crypto.randomUUID()}`;
+  }
+
+  private async resolveCreateToken(ref: TokenRef): Promise<ResolvedCreateToken> {
+    try {
+      const lookupRef = typeof ref === 'object' ? compositeKeyOf(ref) : ref;
+      const resolved = await this.symbols.resolve(lookupRef);
+      const suppliedClassKey = this.tryParseClassKey(ref);
+      return {
+        symbol: resolved.symbol,
+        classKey:
+          suppliedClassKey ??
+          parseTokenClassKey({
+            collection: resolved.collection,
+            category: resolved.category,
+            type: resolved.type,
+            additionalKey: resolved.additionalKey,
+          }),
+      };
+    } catch (error: unknown) {
+      if (!(error instanceof GSwapSDKError) || error.code !== 'UNKNOWN_TOKEN') {
+        throw error;
+      }
+      let classKey: ReturnType<typeof parseTokenClassKey>;
+      try {
+        classKey = parseTokenClassKey(ref);
+      } catch {
+        throw error;
+      }
+      return { symbol: classKey.collection, classKey };
+    }
+  }
+
+  private tryParseClassKey(ref: TokenRef): ReturnType<typeof parseTokenClassKey> | undefined {
+    try {
+      return parseTokenClassKey(ref);
+    } catch {
+      return undefined;
+    }
   }
 }

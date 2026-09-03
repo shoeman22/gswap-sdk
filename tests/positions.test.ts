@@ -1,158 +1,417 @@
-import BigNumber from 'bignumber.js';
 import { expect } from 'chai';
-import { Bundler } from '../src/classes/bundler.js';
+import { GSwapSDKError } from '../src/classes/gswap_sdk_error.js';
 import { HttpClient } from '../src/classes/http_client.js';
-import { Pools } from '../src/classes/pools.js';
+import type { ChainGateway } from '../src/classes/gateway.js';
 import { Positions } from '../src/classes/positions.js';
-import { GalaChainSigner } from '../src/classes/signers.js';
+import type { GalaChainSigner } from '../src/classes/signers.js';
+import type { Symbols } from '../src/classes/symbols.js';
 import type { PriceIn } from '../src/types/amounts.js';
-import type { HttpRequestor } from '../src/types/http_requestor.js';
+import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
+import { type TokenRef, compositeKeyOf, parseTokenClassKey } from '../src/utils/ordering.js';
 
-interface MockBundlerRequest {
-  method: string;
-  body: Record<string, unknown>;
-  stringsInstructions: string[];
+interface RequestRecord {
+  url: string;
+  options: RequestInit | undefined;
 }
 
-class MockSigner implements GalaChainSigner {
-  async signObject<TObjectType extends Record<string, unknown>>(
-    _methodName: string,
-    obj: TObjectType,
-  ): Promise<TObjectType & { signature: string }> {
-    return { ...obj, signature: 'mock-signature' };
-  }
+interface ResolvedEnvironment {
+  gatewayBaseUrl: string;
+  dexContractBasePath: string;
+  tokenContractBasePath: string;
+  dexBackendBaseUrl: string;
 }
 
-describe('Positions', () => {
-  let positions: Positions;
-  let mockFetch: HttpRequestor;
-  let mockBundlerRequest: MockBundlerRequest | undefined;
-  let bundler: Bundler;
-  let pools: Pools;
-  const gatewayBaseUrl = 'https://dex-api.galaswap.gala.com';
-  const dexContractBasePath = '/asset-api/contract-methods/GswapApi';
-  const bundlerBaseUrl = 'https://bundler.galaswap.gala.com';
-  const bundlingAPIBasePath = '/bundling-api';
+interface ResolvedToken {
+  symbol: string;
+  decimals: number;
+  classKey: ReturnType<typeof parseTokenClassKey>;
+}
 
-  beforeEach(() => {
-    mockBundlerRequest = undefined;
+const urls: ResolvedEnvironment = {
+  gatewayBaseUrl: 'https://gateway.test',
+  dexContractBasePath: '/api/asset/dex-contract',
+  tokenContractBasePath: '/api/asset/token-contract',
+  dexBackendBaseUrl: 'https://backend.test',
+};
 
-    // Mock fetch that will be used by HttpClient
-    mockFetch = async (url: string, options?: RequestInit): Promise<Response> => {
-      const body = JSON.parse((options?.body as string) || '{}');
+const galaKey = parseTokenClassKey('GALA|Unit|none|none');
+const gusdcKey = parseTokenClassKey('GUSDC|Unit|none|none');
 
-      // Capture bundler requests
-      if (url.includes('/bundling-api')) {
-        mockBundlerRequest = {
-          method: body.method,
-          body: body.signedDto,
-          stringsInstructions: body.stringsInstructions,
-        };
+function response(payload: unknown, status = 200): HTTPResponse {
+  const body = JSON.stringify(payload);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+    text: async () => body,
+  };
+}
 
-        // Return mock successful bundler response
-        return new Response(
-          JSON.stringify({
-            data: 'mock-tx-id-12345',
-            message: 'Transaction submitted successfully',
-            error: false,
-          }),
-          {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          },
-        );
-      }
+function createFixture() {
+  const requests: RequestRecord[] = [];
+  let nextResponse: HTTPResponse = response({ status: 200, error: false, data: [] });
+  let submittedMethod = '';
+  let submittedBody: Record<string, unknown> | undefined;
 
-      throw new Error(`Mock fetch not configured for URL: ${url}`);
-    };
+  const requestor: HttpRequestor = async (url, options) => {
+    requests.push({ url, options });
+    return nextResponse;
+  };
+  const http = new HttpClient(requestor);
 
-    const httpClient = new HttpClient(mockFetch);
+  const resolve = async (ref: TokenRef): Promise<ResolvedToken> => {
+    const value = typeof ref === 'string' ? ref : compositeKeyOf(ref);
+    if (value === 'GALA' || value === compositeKeyOf(galaKey)) {
+      return { symbol: 'GALA', decimals: 18, classKey: galaKey };
+    }
+    if (value === 'GUSDC' || value === compositeKeyOf(gusdcKey)) {
+      return { symbol: 'GUSDC', decimals: 6, classKey: gusdcKey };
+    }
+    if (value === 'GALA|Unit|none|none') {
+      return { symbol: 'ZED', decimals: 18, classKey: galaKey };
+    }
+    throw GSwapSDKError.unknownTokenError(ref);
+  };
+  const symbols = {
+    resolve,
+    orderPair: async (a: TokenRef, b: TokenRef) => {
+      const [tokenA, tokenB] = await Promise.all([resolve(a), resolve(b)]);
+      return tokenA.symbol < tokenB.symbol
+        ? { token0: tokenA, token1: tokenB, flipped: false }
+        : { token0: tokenB, token1: tokenA, flipped: true };
+    },
+  } as unknown as Symbols;
 
-    const mockSigner = new MockSigner();
-    bundler = new Bundler(
-      bundlerBaseUrl,
-      bundlingAPIBasePath,
-      30000, // 30 second timeout
-      mockSigner,
-      httpClient,
-    );
+  const signer: GalaChainSigner = {
+    signObject: async <TObject extends Record<string, unknown>>(
+      _method: string,
+      object: TObject,
+    ): Promise<TObject & { signature: string }> => ({ ...object, signature: 'signed' }),
+  };
+  const gateway = {
+    submit: async (method: string, body: Record<string, unknown>) => {
+      submittedMethod = method;
+      submittedBody = body;
+      return {
+        method,
+        uniqueKey: String(body.uniqueKey),
+        transactionId: null,
+        mode: 'sync',
+        result: {},
+      };
+    },
+  } as unknown as ChainGateway;
 
-    pools = new Pools(gatewayBaseUrl, dexContractBasePath, httpClient);
-
-    positions = new Positions(gatewayBaseUrl, dexContractBasePath, bundler, pools, httpClient);
+  const positions = new Positions(gateway, symbols, http, urls, {
+    signer,
+    walletAddress: 'client|012345678901234567890123',
   });
 
-  describe('addLiquidityByPrice', () => {
-    it('should calculate correct ticks for GALA/SILK position', async () => {
-      await positions.addLiquidityByPrice({
-        walletAddress: 'eth|123...abc',
-        positionId: '',
-        token0: 'GALA|Unit|none|none',
-        token1: 'SILK|Unit|none|none',
-        fee: 10000,
-        tickSpacing: 200,
-        minPrice: 5 as PriceIn,
-        maxPrice: 20 as PriceIn,
-        amount0Desired: '1',
-        amount1Desired: '1',
-        amount0Min: '1',
-        amount1Min: '1',
-      });
+  return {
+    positions,
+    requests,
+    setResponse: (payload: unknown, status = 200) => {
+      nextResponse = response(payload, status);
+    },
+    get submitted() {
+      return { method: submittedMethod, body: submittedBody };
+    },
+  };
+}
 
-      if (!mockBundlerRequest) {
-        throw new Error('Expected bundler request to be captured');
-      }
+function withoutSignature(body: Record<string, unknown>): Record<string, unknown> {
+  const dto = { ...body };
+  delete dto.signature;
+  return dto;
+}
 
-      expect(mockBundlerRequest.method).to.equal('AddLiquidity');
-      expect(mockBundlerRequest.body.tickLower).to.equal(16000);
-      expect(mockBundlerRequest.body.tickUpper).to.equal(29800);
-      expect(mockBundlerRequest.body.fee).to.equal(10000);
-      expect(mockBundlerRequest.body.amount0Desired).to.equal('1');
-      expect(mockBundlerRequest.body.amount1Desired).to.equal('1');
-      expect(mockBundlerRequest.body.amount0Min).to.equal('1');
-      expect(mockBundlerRequest.body.amount1Min).to.equal('1');
+describe('Positions v2', () => {
+  it('maps user positions from the backend response', async () => {
+    const fixture = createFixture();
+    fixture.setResponse({
+      status: 200,
+      error: false,
+      data: [
+        {
+          pool: 'GALA$GUSDC$3000',
+          token0Symbol: 'GALA',
+          token1Symbol: 'GUSDC',
+          fee: 3000,
+          owner: 'client|012345678901234567890123',
+          tickLower: -19200,
+          tickUpper: 12000,
+          liquidity: '1000',
+          amount0: '10',
+          amount1: '20',
+          inRange: true,
+          currentTick: 1,
+          sqrtPrice: '1.2',
+        },
+      ],
     });
 
-    it('should handle BigNumber amounts correctly', async () => {
-      await positions.addLiquidityByPrice({
-        walletAddress: 'eth|123...abc',
-        positionId: '',
-        token0: 'GALA|Unit|none|none',
-        token1: 'SILK|Unit|none|none',
-        fee: 10000,
-        tickSpacing: 200,
-        minPrice: new BigNumber('5') as PriceIn,
-        maxPrice: new BigNumber('20') as PriceIn,
-        amount0Desired: new BigNumber('10.5'),
-        amount1Desired: new BigNumber('15.25'),
-        amount0Min: new BigNumber('9.5'),
-        amount1Min: new BigNumber('14.0'),
-      });
+    const result = await fixture.positions.getUserPositions('client|012345678901234567890123');
+    expect(result).to.deep.equal([
+      {
+        pool: 'GALA$GUSDC$3000',
+        token0Symbol: 'GALA',
+        token1Symbol: 'GUSDC',
+        fee: 3000,
+        owner: 'client|012345678901234567890123',
+        tickLower: -19200,
+        tickUpper: 12000,
+        liquidity: '1000',
+        amount0: '10',
+        amount1: '20',
+        inRange: true,
+        currentTick: 1,
+        sqrtPrice: '1.2',
+      },
+    ]);
+    expect(fixture.requests[0]?.url).to.equal(
+      'https://backend.test/v2/trade/positions?user=client%7C012345678901234567890123',
+    );
+  });
 
-      if (!mockBundlerRequest) {
-        throw new Error('Expected bundler request to be captured');
-      }
-      expect(mockBundlerRequest.body.amount0Desired?.toString()).to.equal('10.5');
-      expect(mockBundlerRequest.body.amount1Desired?.toString()).to.equal('15.25');
-      expect(mockBundlerRequest.body.amount0Min?.toString()).to.equal('9.5');
-      expect(mockBundlerRequest.body.amount1Min?.toString()).to.equal('14');
+  it('normalizes reversed position pairs and flips ticks before the request', async () => {
+    const fixture = createFixture();
+    fixture.setResponse({
+      status: 200,
+      error: false,
+      data: {
+        pool: 'GALA$GUSDC$3000',
+        token0Symbol: 'GALA',
+        token1Symbol: 'GUSDC',
+        fee: 3000,
+        owner: 'client|012345678901234567890123',
+        tickLower: -19200,
+        tickUpper: 12000,
+        liquidity: '1',
+        amount0: '1',
+        amount1: '2',
+        inRange: false,
+        fees0: '0.4',
+        fees1: '0.5',
+      },
+    });
+    const result = await fixture.positions.getPosition({
+      token0: 'GUSDC',
+      token1: 'GALA',
+      fee: 3000,
+      owner: 'client|012345678901234567890123',
+      tickLower: -12000,
+      tickUpper: 19200,
     });
 
-    for (const [amount, spotPrice, minPrice, maxPrice, decimals1, decimals2, expected] of [
-      [1000, 1, 0.016609256581247782, 0.018392722418891543, 8, 6, 0] as const,
-      [1000, 1, 0, 1.993646755828574, 8, 6, 3427.387349] as const,
-    ]) {
-      it(`should calculate optimal liquidity add correctly (${amount},${spotPrice},${minPrice},${maxPrice},${decimals1},${decimals2})`, () => {
-        const result = positions.calculateOptimalPositionSize(
-          amount,
-          spotPrice,
-          minPrice,
-          maxPrice,
-          decimals1,
-          decimals2,
-        );
-        expect(result.toNumber()).to.equal(expected);
-      });
-    }
+    expect(result).to.deep.include({ fees0: '0.4', fees1: '0.5' });
+    expect(fixture.requests[0]?.url).to.equal(
+      'https://backend.test/v2/trade/position?token0=GALA&token1=GUSDC&fee=3000&owner=client%7C012345678901234567890123&tickLower=-19200&tickUpper=12000',
+    );
+  });
+
+  it('returns null for a position 404', async () => {
+    const fixture = createFixture();
+    fixture.setResponse({ status: 404, error: true, message: 'Position not found' }, 404);
+    const result = await fixture.positions.getPosition({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      fee: 3000,
+      owner: 'client|012345678901234567890123',
+      tickLower: -19200,
+      tickUpper: 12000,
+    });
+    expect(result).to.equal(null);
+  });
+
+  it('uses exact estimate URLs and decimal strings', async () => {
+    const fixture = createFixture();
+    fixture.setResponse({
+      status: 200,
+      error: false,
+      data: {
+        amount0: '10',
+        amount1: '20',
+        liquidity: '30',
+        token0Symbol: 'GALA',
+        token1Symbol: 'GUSDC',
+        tickLower: -19200,
+        tickUpper: 12000,
+        amountIsCanonicalToken0: true,
+      },
+    });
+    await fixture.positions.estimateAddLiquidity({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      fee: 3000,
+      tickLower: -19200,
+      tickUpper: 12000,
+      amount: '1.2300',
+      amountIsToken0: true,
+    });
+    expect(fixture.requests[0]?.url).to.equal(
+      'https://backend.test/v2/trade/add-liq-estimate?token0=GALA&token1=GUSDC&fee=3000&tickLower=-19200&tickUpper=12000&amount=1.23&amountIsToken0=true',
+    );
+
+    fixture.setResponse({ status: 200, error: false, data: { amount0: '10', amount1: '20' } });
+    await fixture.positions.estimateRemoveLiquidity({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      fee: 3000,
+      tickLower: -19200,
+      tickUpper: 12000,
+      liquidity: '30.00',
+    });
+    expect(fixture.requests[1]?.url).to.equal(
+      'https://backend.test/v2/trade/remove-liq-estimate?token0=GALA&token1=GUSDC&fee=3000&tickLower=-19200&tickUpper=12000&liquidity=30',
+    );
+  });
+
+  it('builds AddLiquidity with exactly one deposit field and signs it', async () => {
+    const fixture = createFixture();
+    await fixture.positions.addLiquidityByTicks({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      fee: 3000,
+      tickLower: -19200,
+      tickUpper: 12000,
+      amount: '100.00',
+      amountIsToken0: true,
+    });
+    const submitted = fixture.submitted;
+    expect(submitted.method).to.equal('AddLiquidity');
+    const dto = withoutSignature(submitted.body ?? {});
+    expect(dto).to.deep.include({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      fee: 3000,
+      tickLower: -19200,
+      tickUpper: 12000,
+      depositQuantityToken0: '100',
+    });
+    expect(Object.keys(dto).filter((key) => key.startsWith('depositQuantity'))).to.deep.equal([
+      'depositQuantityToken0',
+    ]);
+    expect(submitted.body?.signature).to.equal('signed');
+  });
+
+  it('orders AddLiquidity and maps the deposit side for a reversed pair', async () => {
+    const fixture = createFixture();
+    await fixture.positions.addLiquidityByTicks({
+      token0: 'GUSDC',
+      token1: 'GALA',
+      fee: 3000,
+      tickLower: -12000,
+      tickUpper: 19200,
+      amount: '5',
+      amountIsToken0: true,
+    });
+    const dto = withoutSignature(fixture.submitted.body ?? {});
+    expect(dto).to.deep.include({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      tickLower: -19200,
+      tickUpper: 12000,
+      depositQuantityToken1: '5',
+    });
+    expect(dto).not.to.have.property('depositQuantityToken0');
+  });
+
+  it('aligns negative price-derived ticks down and up', async () => {
+    const fixture = createFixture();
+    await fixture.positions.addLiquidityByPrice({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      fee: 3000,
+      minPrice: '0.14749' as PriceIn,
+      maxPrice: '0.2' as PriceIn,
+      amount: '10',
+      amountIsToken0: false,
+    });
+    expect(withoutSignature(fixture.submitted.body ?? {})).to.deep.include({
+      tickLower: -19200,
+      tickUpper: -16080,
+      depositQuantityToken1: '10',
+    });
+  });
+
+  it('omits both withdrawal fields when closing and maps one field when partial', async () => {
+    const fixture = createFixture();
+    await fixture.positions.removeLiquidity({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      fee: 3000,
+      tickLower: -19200,
+      tickUpper: 12000,
+    });
+    const closeDto = withoutSignature(fixture.submitted.body ?? {});
+    expect(closeDto).not.to.have.property('withdrawalQuantityToken0');
+    expect(closeDto).not.to.have.property('withdrawalQuantityToken1');
+
+    await fixture.positions.removeLiquidity({
+      token0: 'GUSDC',
+      token1: 'GALA',
+      fee: 3000,
+      tickLower: -12000,
+      tickUpper: 19200,
+      amount0: '7.50',
+    });
+    expect(withoutSignature(fixture.submitted.body ?? {})).to.have.property(
+      'withdrawalQuantityToken1',
+      '7.5',
+    );
+  });
+
+  it('builds a fee-sweeping CollectPositionFees DTO', async () => {
+    const fixture = createFixture();
+    await fixture.positions.collectPositionFees({
+      token0: 'GUSDC',
+      token1: 'GALA',
+      fee: 3000,
+      tickLower: -12000,
+      tickUpper: 19200,
+    });
+    const dto = withoutSignature(fixture.submitted.body ?? {});
+    expect(dto).to.deep.include({
+      token0: 'GALA',
+      token1: 'GUSDC',
+      tickLower: -19200,
+      tickUpper: 12000,
+    });
+    expect(dto).not.to.have.property('amount0Requested');
+    expect(dto).not.to.have.property('amount1Requested');
+  });
+
+  it('resolves registered symbols, falls back to class collections, and inverts CreatePool price', async () => {
+    const fixture = createFixture();
+    await fixture.positions.createPool({
+      token0: 'GALA|Unit|none|none',
+      token1: 'GUSDC|Unit|none|none',
+      fee: 0,
+      startingPrice: '2',
+      isPrivate: true,
+      privateAccess: ['client|012345678901234567890123'],
+    });
+    const dto = withoutSignature(fixture.submitted.body ?? {});
+    expect(dto).to.deep.include({
+      token0Symbol: 'GUSDC',
+      token1Symbol: 'ZED',
+      fee: 0,
+      startingPrice: '0.5',
+      isPrivate: true,
+      privateAccess: ['client|012345678901234567890123'],
+    });
+    expect(dto).to.have.property('token0Key').that.deep.equals(gusdcKey);
+    expect(dto).to.have.property('token1Key').that.deep.equals(galaKey);
+    expect(dto).not.to.have.property('startingSqrtPrice');
+
+    await fixture.positions.createPool({
+      token0: 'GALA|Unit|none|none',
+      token1: 'GUSDC|Unit|none|none',
+      fee: 500,
+      startingSqrtPrice: '4',
+    });
+    const sqrtDto = withoutSignature(fixture.submitted.body ?? {});
+    expect(sqrtDto).to.have.property('startingSqrtPrice', '0.25');
+    expect(sqrtDto).not.to.have.property('startingPrice');
   });
 });
