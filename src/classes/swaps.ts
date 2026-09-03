@@ -59,7 +59,7 @@ export class Swaps {
     tokenOut: TokenRef,
     fee: FEE_TIER,
     amount: SwapAmount,
-  ): Promise<SubmittedTransaction<IndexedTransaction | null>> {
+  ): Promise<SubmittedTransaction<IndexedTransaction>> {
     validateFee(fee);
 
     const dto = await this.buildTradeDto(tokenIn, tokenOut, fee, amount);

@@ -77,14 +77,6 @@ export class SubmittedTransaction<TConfirmation = IndexedTransaction | Position 
         return { ...data, uniqueKey: this.uniqueKey } as TConfirmation;
       }
 
-      if (
-        this.transactionId !== null &&
-        this.blockNumber !== null &&
-        isPendingExploreResponse(response.status, body)
-      ) {
-        return null as TConfirmation;
-      }
-
       const retryAfter = response.status === 429 ? readRetryAfter(response) : undefined;
       if (retryAfter !== undefined) {
         const waitMs = retryAfter;

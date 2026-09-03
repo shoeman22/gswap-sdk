@@ -40,7 +40,7 @@ export class ChainGateway {
     method: 'Trade',
     signedBody: Record<string, unknown>,
     options?: ChainSubmitOptions,
-  ): Promise<SubmittedTransaction<IndexedTransaction | null>>;
+  ): Promise<SubmittedTransaction<IndexedTransaction>>;
   public async submit(
     method: string,
     signedBody: Record<string, unknown>,

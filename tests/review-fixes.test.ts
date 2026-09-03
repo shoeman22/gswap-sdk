@@ -161,7 +161,7 @@ describe('adversarial review fixes', () => {
     expect(symbolCalls).to.equal(0);
   });
 
-  it('does not spin on pending explore when both transaction headers are known', async () => {
+  it('keeps polling explore when both transaction headers are known and resolves once indexed', async () => {
     let calls = 0;
     const transaction = new SubmittedTransaction({
       method: 'Trade',
@@ -172,14 +172,22 @@ describe('adversarial review fixes', () => {
       dexBackendBaseUrl: BASE,
       httpRequestor: async () => {
         calls += 1;
-        return response(
-          { error: true, message: 'No indexed transaction for that uniqueKey yet' },
-          404,
-        );
+        if (calls === 1) {
+          return response(
+            { error: true, message: 'No indexed transaction for that uniqueKey yet' },
+            404,
+          );
+        }
+        return response({ data: { transactionId: 'tx-known', blockNumber: 42 } }, 200);
       },
     });
-    expect(await transaction.confirm({ timeoutMs: 60_000, pollIntervalMs: 1 })).to.equal(null);
-    expect(calls).to.equal(1);
+    const confirmation = await transaction.confirm({ timeoutMs: 60_000, pollIntervalMs: 1 });
+    expect(confirmation).to.include({
+      uniqueKey: 'known',
+      transactionId: 'tx-known',
+      blockNumber: 42,
+    });
+    expect(calls).to.equal(2);
   });
 
   it('continues polling when response metadata is absent', async () => {
