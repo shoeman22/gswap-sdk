@@ -60,12 +60,18 @@ function gateway(requestor: HttpRequestor): ChainGateway {
 
 describe('quality boundaries', () => {
   it('covers SDK construction, HTTP methods, and asset validation/mapping', async () => {
-    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    const calls: Array<{
+      url: string;
+      method: string;
+      body?: string;
+      headers?: RequestInit['headers'];
+    }> = [];
     const requestor: HttpRequestor = async (url, options) => {
       calls.push({
         url,
         method: options?.method ?? 'GET',
         ...(typeof options?.body === 'string' ? { body: options.body } : {}),
+        ...(options?.headers === undefined ? {} : { headers: options.headers }),
       });
       return makeResponse({
         status: 200,
@@ -96,6 +102,7 @@ describe('quality boundaries', () => {
         count: 1,
       },
     });
+    expect(calls[0]?.headers).to.deep.include({ 'User-Agent': 'GalaChain-SDK/1.0.0-rc.1' });
     const failingClient = new HttpClient(async () =>
       makeResponse({ error: { ErrorKey: 'BAD_REQUEST', Message: 'bad request' } }, 400),
     );
