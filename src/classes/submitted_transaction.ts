@@ -47,7 +47,7 @@ export class SubmittedTransaction {
       if (response.ok) {
         const envelope = asRecord(body);
         const data = envelope?.['data'] ?? body;
-        return data as IndexedTransaction;
+        return withUniqueKey(data, this.uniqueKey);
       }
 
       const message = bodyMessage(body);
@@ -92,6 +92,14 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function withUniqueKey(data: unknown, uniqueKey: string): IndexedTransaction {
+  const record = asRecord(data);
+  if (record === undefined) return data as IndexedTransaction;
+  const enriched = { ...record };
+  Object.defineProperty(enriched, 'uniqueKey', { value: uniqueKey, enumerable: false });
+  return enriched as unknown as IndexedTransaction;
 }
 
 function delay(milliseconds: number): Promise<void> {

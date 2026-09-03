@@ -103,6 +103,7 @@ export interface QuoteResult {
 
 /** Indexed trade data returned by explore confirmation. */
 export interface IndexedTransaction {
+  uniqueKey: string;
   transactionId: string;
   blockNumber: number;
   poolHash: string | null;
