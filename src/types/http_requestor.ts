@@ -5,6 +5,11 @@ export interface HTTPResponse {
   status: FetchReturnValue['status'];
   json: FetchReturnValue['json'];
   text: FetchReturnValue['text'];
+  headers?:
+    | {
+        get(name: string): string | null;
+      }
+    | Record<string, string | undefined>;
 }
 
 export type HttpRequestor = (

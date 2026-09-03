@@ -3,6 +3,7 @@ import { debugLog } from '../utils/debug.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 
 export class HttpClient {
+  /** Create an HTTP client around fetch or an injected requestor. */
   constructor(private readonly httpRequestor: HttpRequestor = fetch) {}
 
   private async sendRequest<TReturnType>(
@@ -34,6 +35,7 @@ export class HttpClient {
     return json as TReturnType;
   }
 
+  /** Send a JSON POST request and decode its response. */
   async sendPostRequest<TReturnType>(
     baseUrl: string,
     basePath: string,
@@ -43,6 +45,7 @@ export class HttpClient {
     return this.sendRequest('POST', baseUrl, basePath, endpoint, body);
   }
 
+  /** Send a GET request with URL-encoded query parameters and decode its response. */
   async sendGetRequest<TReturnType>(
     baseUrl: string,
     basePath: string,

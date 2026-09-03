@@ -17,7 +17,7 @@ export default defineConfig([
     minify: false,
     target: 'node16',
     platform: 'node',
-    external: ['@gala-chain/api', 'bignumber.js', 'socket.io-client'],
+    external: ['@gala-chain/api', 'bignumber.js'],
     outDir: 'dist',
     outExtension({ format }) {
       return {
@@ -40,7 +40,7 @@ export default defineConfig([
     minify: true,
     target: 'es2020',
     platform: 'browser',
-    external: ['@gala-chain/api', 'bignumber.js', 'socket.io-client'],
+    external: ['@gala-chain/api', 'bignumber.js'],
     outDir: 'dist/browser',
     outExtension() {
       return {
