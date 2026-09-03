@@ -48,6 +48,26 @@ describe('Pools', () => {
     ]);
   });
 
+  it('rejects repeated FetchPools bookmarks', async () => {
+    const pools = new Pools(
+      gateway(async () => response({ Status: 1, Data: { results: [], nextPageBookmark: 'same' } })),
+      symbols(),
+    );
+    const error = await pools.getPools().catch((caught: unknown) => caught);
+    expect(error).to.be.instanceOf(GSwapSDKError);
+    expect((error as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+  });
+
+  it('rejects FetchPools pagination beyond the configured page cap', async () => {
+    const pools = new Pools(
+      gateway(async () => response({ Status: 1, Data: { results: [], nextPageBookmark: 'next' } })),
+      symbols(),
+    );
+    const error = await pools.getPools({ maxPages: 1 }).catch((cause: unknown) => cause);
+    expect(error).to.be.instanceOf(GSwapSDKError);
+    expect((error as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+  });
+
   it('uses resolved caller order for backend pool and slot0 requests', async () => {
     const calls: string[] = [];
     const requestor: HttpRequestor = async (url: string) => {
@@ -90,7 +110,9 @@ describe('Pools', () => {
     );
     const error = await failing.getPool('GALA', 'GUSDC', 3000).catch((caught: unknown) => caught);
     expect((error as Error).message).to.equal('Pool request failed.');
-    const invalidFee = await failing.getPool('GALA', 'GUSDC', 1).catch((caught: unknown) => caught);
+    const invalidFee = await failing
+      .getPool('GALA', 'GUSDC', 1 as never)
+      .catch((caught: unknown) => caught);
     expect((invalidFee as GSwapSDKError).message).to.include('Invalid fee tier');
 
     const empty = new Pools(

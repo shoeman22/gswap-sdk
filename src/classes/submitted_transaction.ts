@@ -1,9 +1,10 @@
 import type { HttpRequestor } from '../types/http_requestor.js';
-import type { IndexedTransaction } from '../types/v2_results.js';
+import type { IndexedTransaction, Position } from '../types/v2_results.js';
 import { GSwapSDKError, getObjectProperty, getStringProperty } from './gswap_sdk_error.js';
+import { readResponseBody, requestWithTimeout } from '../utils/transport.js';
 
 /** A synchronously submitted v2 transaction with optional indexed confirmation. */
-export class SubmittedTransaction {
+export class SubmittedTransaction<TConfirmation = IndexedTransaction | Position | null> {
   public readonly method: string;
   public readonly uniqueKey: string;
   public readonly transactionId: string | null;
@@ -11,6 +12,10 @@ export class SubmittedTransaction {
   public readonly result: unknown;
   private readonly backendBaseUrl: string;
   private readonly requestor: HttpRequestor;
+  private readonly requestTimeoutMs: number;
+  private readonly positionConfirmation:
+    | ((signal: AbortSignal) => Promise<Position | null>)
+    | undefined;
 
   /** Construct a submitted transaction from a successful gateway response. */
   constructor(options: {
@@ -20,7 +25,8 @@ export class SubmittedTransaction {
     result: unknown;
     dexBackendBaseUrl: string;
     httpRequestor: HttpRequestor;
-    chainCallTimeoutMs?: number;
+    requestTimeoutMs?: number;
+    positionConfirmation?: (signal: AbortSignal) => Promise<Position | null>;
   }) {
     this.method = options.method;
     this.uniqueKey = options.uniqueKey;
@@ -28,22 +34,36 @@ export class SubmittedTransaction {
     this.result = options.result;
     this.backendBaseUrl = options.dexBackendBaseUrl.replace(/\/$/u, '');
     this.requestor = options.httpRequestor;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.positionConfirmation = options.positionConfirmation;
   }
 
-  /** Confirm a trade through the indexed explore endpoint; liquidity writes resolve to `null`. */
+  /** Confirm a trade through explore or poll the affected position for a liquidity write.
+   *
+   * @example
+   * ```ts
+   * const indexed = await submitted.confirm({ timeoutMs: 60_000 });
+   * ```
+   */
   public async confirm(options?: {
     timeoutMs?: number;
     pollIntervalMs?: number;
-  }): Promise<IndexedTransaction | null> {
-    if (this.method !== 'Trade') return null;
+  }): Promise<TConfirmation> {
+    if (this.method !== 'Trade') return this.confirmPosition(options) as Promise<TConfirmation>;
     const timeoutMs = options?.timeoutMs ?? 60_000;
-    const pollIntervalMs = options?.pollIntervalMs ?? 2_500;
+    const pollIntervalMs = Math.max(500, options?.pollIntervalMs ?? 2_500);
     const startedAt = Date.now();
     const url = `${this.backendBaseUrl}/explore/transaction?uniqueKey=${encodeURIComponent(this.uniqueKey)}`;
+    let attempt = 0;
 
     while (Date.now() - startedAt <= timeoutMs) {
-      const response = await this.requestor(url, { method: 'GET' });
-      const body = await readBody(response);
+      const response = await requestWithTimeout(
+        this.requestor,
+        url,
+        { method: 'GET' },
+        this.requestTimeoutMs,
+      );
+      const body = await readResponseBody(response);
       if (response.ok) {
         const envelope = asRecord(body);
         const data = asRecord(envelope?.['data']) ?? envelope;
@@ -54,35 +74,57 @@ export class SubmittedTransaction {
             { status: response.status, body, url },
           );
         }
-        // The explore row does not echo the uniqueKey; carry the DTO's key so callers can correlate.
-        return { ...data, uniqueKey: this.uniqueKey } as IndexedTransaction;
+        return { ...data, uniqueKey: this.uniqueKey } as TConfirmation;
       }
 
-      const message = bodyMessage(body);
-      const serializedBody = JSON.stringify(body).toLowerCase();
-      if (response.status !== 404 || !serializedBody.includes('uniquekey')) {
-        throw new GSwapSDKError(message, 'CONFIRMATION_FAILED', {
+      const retryAfter = response.status === 429 ? readRetryAfter(response) : undefined;
+      if (retryAfter !== undefined) {
+        const waitMs = retryAfter;
+        if (Date.now() - startedAt + waitMs > timeoutMs) break;
+        await delay(waitMs);
+        continue;
+      }
+      if (!isPendingExploreResponse(response.status, body)) {
+        throw new GSwapSDKError(bodyMessage(body), 'CONFIRMATION_FAILED', {
           status: response.status,
           body,
           url,
         });
       }
-      if (Date.now() - startedAt + pollIntervalMs > timeoutMs) break;
-      await delay(pollIntervalMs);
+      const backoff = Math.min(30_000, pollIntervalMs * 2 ** Math.min(attempt, 5));
+      const waitMs = jitter(backoff);
+      attempt += 1;
+      if (Date.now() - startedAt + waitMs > timeoutMs) break;
+      await delay(waitMs);
     }
 
     throw GSwapSDKError.confirmationTimeoutError(this.uniqueKey);
   }
-}
 
-async function readBody(response: {
-  json(): Promise<unknown>;
-  text(): Promise<string>;
-}): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    return await response.text();
+  private async confirmPosition(options?: {
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  }): Promise<Position | null> {
+    if (this.positionConfirmation === undefined) return null;
+    const timeoutMs = options?.timeoutMs ?? 60_000;
+    const pollIntervalMs = Math.max(500, options?.pollIntervalMs ?? 2_500);
+    const startedAt = Date.now();
+    let attempt = 0;
+    while (Date.now() - startedAt <= timeoutMs) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+      try {
+        const position = await this.positionConfirmation(controller.signal);
+        if (position !== null) return position;
+      } finally {
+        clearTimeout(timer);
+      }
+      const waitMs = jitter(Math.min(30_000, pollIntervalMs * 2 ** Math.min(attempt, 5)));
+      attempt += 1;
+      if (Date.now() - startedAt + waitMs > timeoutMs) break;
+      await delay(waitMs);
+    }
+    throw GSwapSDKError.confirmationTimeoutError(this.uniqueKey);
   }
 }
 
@@ -104,4 +146,35 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function jitter(milliseconds: number): number {
+  return Math.max(0, Math.round(milliseconds * (0.9 + Math.random() * 0.2)));
+}
+
+function isPendingExploreResponse(status: number, body: unknown): boolean {
+  const record = asRecord(body);
+  return (
+    status === 404 &&
+    record?.['error'] === true &&
+    bodyMessage(body) === 'No indexed transaction for that uniqueKey yet'
+  );
+}
+
+function readRetryAfter(response: {
+  headers?: { get(name: string): string | null } | Record<string, string | undefined>;
+}): number | undefined {
+  const headers = response.headers;
+  if (headers === undefined) return undefined;
+  const raw =
+    'get' in headers && typeof headers.get === 'function'
+      ? headers.get('retry-after')
+      : findRetryAfter(headers as Record<string, string | undefined>);
+  if (raw === null || raw === undefined) return undefined;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
+}
+
+function findRetryAfter(headers: Record<string, string | undefined>): string | undefined {
+  return Object.entries(headers).find(([name]) => name.toLowerCase() === 'retry-after')?.[1];
 }

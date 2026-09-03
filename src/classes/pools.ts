@@ -1,10 +1,11 @@
-import { ALL_FEE_TIERS } from '../types/fees.js';
+import type { FEE_TIER } from '../types/fees.js';
 import type { CompositePool, PoolInfo, Slot0 } from '../types/v2_results.js';
 import { orderSymbols, readOrderedSymbols, type TokenRef } from '../utils/ordering.js';
 import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 import { HttpClient } from './http_client.js';
 import type { Symbols } from './symbols.js';
+import { validateFee } from '../utils/validation.js';
 
 interface PoolPage {
   results?: PoolInfo[];
@@ -15,7 +16,9 @@ interface BackendEnvelope<T> {
   data: T;
 }
 
-type PoolGateway = Pick<ChainGateway, 'chainRead' | 'httpRequestor' | 'dexBackendBaseUrl'>;
+type PoolGateway = Pick<ChainGateway, 'chainRead' | 'httpRequestor' | 'dexBackendBaseUrl'> & {
+  requestTimeoutMs?: number;
+};
 type PoolSymbols = Pick<Symbols, 'resolve'>;
 
 /** Read-only pool and current-price access for the current GalaChainDex contract. */
@@ -32,7 +35,7 @@ export class Pools {
     private readonly gateway: PoolGateway,
     private readonly symbols: PoolSymbols,
   ) {
-    this.http = new HttpClient(gateway.httpRequestor);
+    this.http = new HttpClient(gateway.httpRequestor, gateway.requestTimeoutMs ?? 30_000);
   }
 
   private readonly http: HttpClient;
@@ -46,12 +49,39 @@ export class Pools {
    * console.log(pools.length);
    * ```
    */
-  public async getPools(): Promise<PoolInfo[]> {
+  public async getPools(options?: {
+    signal?: AbortSignal;
+    maxPages?: number;
+  }): Promise<PoolInfo[]> {
     const pools: PoolInfo[] = [];
     let bookmark: string | undefined;
+    const seenBookmarks = new Set<string>();
+    let pageCount = 0;
     do {
+      pageCount += 1;
+      if (pageCount > (options?.maxPages ?? 1_000)) {
+        throw new GSwapSDKError(
+          'Pool pagination exceeded the maximum page count.',
+          'INVALID_CHAIN_RESPONSE',
+          {
+            maxPages: options?.maxPages ?? 1_000,
+          },
+        );
+      }
+      if (bookmark !== undefined) {
+        if (seenBookmarks.has(bookmark)) {
+          throw new GSwapSDKError(
+            'Pool pagination repeated a bookmark.',
+            'INVALID_CHAIN_RESPONSE',
+            { bookmark },
+          );
+        }
+        seenBookmarks.add(bookmark);
+      }
       const body = bookmark === undefined ? {} : { bookmark };
-      const page = await this.gateway.chainRead<PoolPage>('FetchPools', body);
+      const page = await this.gateway.chainRead<PoolPage>('FetchPools', body, {
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
+      });
       pools.push(...(page.results ?? []));
       bookmark = page.nextPageBookmark;
     } while (bookmark !== undefined && bookmark !== '');
@@ -67,7 +97,7 @@ export class Pools {
    * console.log(pool.flippedFromRequest);
    * ```
    */
-  public async getPool(token0: TokenRef, token1: TokenRef, fee: number): Promise<PoolInfo> {
+  public async getPool(token0: TokenRef, token1: TokenRef, fee: FEE_TIER): Promise<PoolInfo> {
     validateFee(fee);
     return this.getBackend<PoolInfo>('/pool', await this.backendParams(token0, token1, fee));
   }
@@ -81,7 +111,7 @@ export class Pools {
    * console.log(slot0.tick);
    * ```
    */
-  public async getSlot0(token0: TokenRef, token1: TokenRef, fee: number): Promise<Slot0> {
+  public async getSlot0(token0: TokenRef, token1: TokenRef, fee: FEE_TIER): Promise<Slot0> {
     validateFee(fee);
     return this.getBackend<Slot0>('/slot0', await this.backendParams(token0, token1, fee));
   }
@@ -98,7 +128,7 @@ export class Pools {
   public async getCompositePool(
     token0: TokenRef,
     token1: TokenRef,
-    fee: number,
+    fee: FEE_TIER,
   ): Promise<CompositePool> {
     validateFee(fee);
     const first = await resolveSymbol(this.symbols, token0);
@@ -114,7 +144,7 @@ export class Pools {
   private async backendParams(
     token0: TokenRef,
     token1: TokenRef,
-    fee: number,
+    fee: FEE_TIER,
   ): Promise<Record<string, string>> {
     return {
       token0: await resolveSymbol(this.symbols, token0),
@@ -136,12 +166,6 @@ export class Pools {
       if (error instanceof GSwapSDKError) throw error;
       throw new GSwapSDKError('Pool request failed.', 'HTTP_ERROR', { cause: error });
     }
-  }
-}
-
-function validateFee(fee: number): void {
-  if (!ALL_FEE_TIERS.some((tier) => Number(tier) === fee)) {
-    throw new GSwapSDKError(`Invalid fee tier: ${fee}`, 'VALIDATION_ERROR', { fee });
   }
 }
 

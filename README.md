@@ -37,9 +37,9 @@ up.
 
 | Signer | Scheme | Identity resolved by the chain |
 | --- | --- | --- |
-| `PrivateKeySigner` | GalaChain native signature | Registered `client|...` alias |
-| `GalaWalletSigner` | Native `gala_signChainDto`, with personal-sign fallback for older wallets | Native: registered `client|...`; fallback: bare `eth|...` |
-| `BrowserWalletSigner` | EIP-1193 `personal_sign` | Bare `eth|...` alias |
+| `PrivateKeySigner` | GalaChain native signature | Recovered from the private key |
+| `GalaWalletSigner` | Native `gala_signChainDto`, with personal-sign fallback for older wallets | Selected Ethereum account (`0x...`; `eth|0x...` also accepted) |
+| `BrowserWalletSigner` | EIP-1193 `personal_sign` | Selected Ethereum account (`0x...`) |
 
 Native signing is the default for server keys and current Gala Wallets.
 Browser wallet personal-sign includes the SDK's calculated prefix. EIP-712 is

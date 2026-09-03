@@ -35,9 +35,33 @@ export class Symbols {
     return this.refreshInFlight;
   }
 
+  /** Invalidate the cached symbol registry after a write changes registration state.
+   *
+   * @example
+   * ```ts
+   * gSwap.symbols.invalidate();
+   * ```
+   */
+  public invalidate(): void {
+    this.cachedSymbols = undefined;
+    this.cachedAt = 0;
+  }
+
+  /** Force one registry refresh, bypassing the cache.
+   *
+   * @example
+   * ```ts
+   * const symbols = await gSwap.symbols.refresh();
+   * ```
+   */
+  public async refresh(): Promise<TradingSymbol[]> {
+    this.invalidate();
+    return this.list();
+  }
+
   /** Resolve a symbol or token class key to its registered symbol metadata. */
   public async resolve(ref: TokenRef): Promise<TradingSymbol> {
-    const symbols = await this.list();
+    let symbols = await this.list();
     const composite =
       typeof ref === 'string'
         ? isCompositeKey(ref)
@@ -48,7 +72,15 @@ export class Symbols {
       (entry) =>
         entry.symbol === ref || (composite !== undefined && compositeKeyOf(entry) === composite),
     );
-    if (resolved === undefined) throw GSwapSDKError.unknownTokenError(ref);
+    if (resolved === undefined) {
+      symbols = await this.refresh();
+      const refreshed = symbols.find(
+        (entry) =>
+          entry.symbol === ref || (composite !== undefined && compositeKeyOf(entry) === composite),
+      );
+      if (refreshed === undefined) throw GSwapSDKError.unknownTokenError(ref);
+      return refreshed;
+    }
     return resolved;
   }
 

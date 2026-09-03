@@ -205,7 +205,7 @@ describe('quality boundaries', () => {
     ).submit('Trade', {});
     expect(successful.transactionId).to.equal('tx-1');
     const fallbackSuccess = await gateway(async () =>
-      makeResponse({ transactionId: 'tx-2', mode: 'sync', result: null }, 201),
+      makeResponse({ data: { transactionId: 'tx-2', mode: 'sync', result: null } }, 201),
     ).submit('Trade', { uniqueKey: 'with-override' }, { walletAddress: 'client|override' });
     expect(fallbackSuccess.transactionId).to.equal('tx-2');
     const nullRetry = await gateway(async () =>
@@ -311,11 +311,10 @@ describe('quality boundaries', () => {
       httpRequestor: async () =>
         makeResponse('{"transactionId":"tx-text"}', 200, { jsonFails: true }),
     });
-    const textError = await textResponse.confirm().catch((error: unknown) => error);
-    expect((textError as GSwapSDKError).code).to.equal('CONFIRMATION_FAILED');
-    expect((textError as GSwapSDKError).message).to.equal(
-      'Transaction confirmation returned a malformed body',
-    );
+    expect(await textResponse.confirm()).to.deep.equal({
+      transactionId: 'tx-text',
+      uniqueKey: 'text',
+    });
 
     expect(GSwapSDKError.noSignerError().code).to.equal('NO_SIGNER');
     expect(GSwapSDKError.noPoolAvailableError('A', 'B').code).to.equal('NO_POOL_AVAILABLE');

@@ -199,7 +199,7 @@ describe('v2 foundation', () => {
           : response({ status: 200, error: false, data: { transactionId: 'tx-1' } });
       },
     });
-    expect(await transaction.confirm({ timeoutMs: 100, pollIntervalMs: 0 })).to.deep.equal({
+    expect(await transaction.confirm({ timeoutMs: 1_000, pollIntervalMs: 500 })).to.deep.equal({
       transactionId: 'tx-1',
       uniqueKey: 'trade-1',
     });
@@ -211,7 +211,8 @@ describe('v2 foundation', () => {
       transactionId: null,
       result: {},
       dexBackendBaseUrl: 'https://backend.example',
-      httpRequestor: async () => response({ message: 'uniqueKey is still pending' }, 404),
+      httpRequestor: async () =>
+        response({ error: true, message: 'No indexed transaction for that uniqueKey yet' }, 404),
     });
     const error = await pending
       .confirm({ timeoutMs: 2, pollIntervalMs: 0 })

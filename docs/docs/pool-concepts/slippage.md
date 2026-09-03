@@ -126,6 +126,8 @@ If more than 105 $GALA would be required, the transaction fails.
 Always get a recent quote before executing large trades:
 
 ```typescript
+import BigNumber from 'bignumber.js';
+
 // Get fresh quote for exact inpu
 const quote = await gSwap.quoting.quoteExactInput(
   'GALA|Unit|none|none',
@@ -135,7 +137,9 @@ const quote = await gSwap.quoting.quoteExactInput(
 
 // Calculate slippage protection based on quote
 const slippageTolerance = 0.01; // 1%
-const amountOutMinimum = quote.amountOut.multipliedBy(1 - slippageTolerance).toString();
+const amountOutMinimum = new BigNumber(quote.amountOut)
+  .multipliedBy(1 - slippageTolerance)
+  .toFixed();
 
 // Execute with slippage protection
 const tx = await gSwap.swaps.swap(

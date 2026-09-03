@@ -21,7 +21,9 @@ const dto = {
   uniqueKey: 'test-key',
 };
 
-const walletAddress = 'client|alice';
+const walletAddress = '0x0123456789012345678901234567890123456789';
+const nativeSignature = 'a'.repeat(130);
+const personalSignature = 'b'.repeat(130);
 
 function installGalaWallet(request: (args: WalletRequest) => Promise<unknown>): WalletRequest[] {
   const requests: WalletRequest[] = [];
@@ -40,6 +42,12 @@ function installGalaWallet(request: (args: WalletRequest) => Promise<unknown>): 
 function removeGalaWallet(): void {
   const globalObject = globalThis as unknown as { window?: TestWindow };
   delete globalObject.window;
+}
+
+function rejectWithValue(value: unknown): Promise<never> {
+  return new Promise((_, reject) => {
+    Reflect.apply(reject, undefined, [value]);
+  });
 }
 
 describe('signers', () => {
@@ -85,15 +93,15 @@ describe('signers', () => {
       const requests = installGalaWallet(async (request) => {
         if (request.params?.[3] === 'native')
           return Promise.reject(new Error('unsupported scheme'));
-        return 'fallback-signature';
+        return personalSignature;
       });
       const signed = await new GalaWalletSigner(walletAddress).signObject('Trade', dto);
       expect(requests).to.have.length(2);
-      expect(signed.signature).to.equal('fallback-signature');
+      expect(signed.signature).to.equal(personalSignature);
     });
 
     it('uses native signing with the exact four-parameter request', async () => {
-      const requests = installGalaWallet(async () => 'native-signature');
+      const requests = installGalaWallet(async () => nativeSignature);
       const signer = new GalaWalletSigner(walletAddress);
 
       const signed = await signer.signObject('Trade', dto);
@@ -105,12 +113,12 @@ describe('signers', () => {
         },
       ]);
       expect(signer.effectiveScheme).to.equal('native');
-      expect(signed).to.deep.equal({ ...dto, signature: 'native-signature' });
+      expect(signed).to.deep.equal({ ...dto, signature: nativeSignature });
       expect(signed).not.to.have.property('prefix');
     });
 
     it('uses personal-sign when selected explicitly', async () => {
-      const requests = installGalaWallet(async () => 'personal-signature');
+      const requests = installGalaWallet(async () => personalSignature);
       const signer = new GalaWalletSigner(walletAddress, { scheme: 'personal-sign' });
       const prefix = calculatePersonalSignPrefix(dto);
 
@@ -122,7 +130,7 @@ describe('signers', () => {
           params: [serialize({ ...dto, prefix }), walletAddress, 'Trade'],
         },
       ]);
-      expect(signed).to.deep.equal({ ...dto, prefix, signature: 'personal-signature' });
+      expect(signed).to.deep.equal({ ...dto, prefix, signature: personalSignature });
     });
 
     it('falls back once to personal-sign for unsupported native schemes', async () => {
@@ -130,7 +138,7 @@ describe('signers', () => {
         if (request.params?.[3] === 'native') {
           throw new Error('unknown scheme');
         }
-        return 'fallback-signature';
+        return personalSignature;
       });
       const signer = new GalaWalletSigner(walletAddress);
       const prefix = calculatePersonalSignPrefix(dto);
@@ -148,7 +156,35 @@ describe('signers', () => {
         },
       ]);
       expect(signer.effectiveScheme).to.equal('personal-sign');
-      expect(signed).to.deep.equal({ ...dto, prefix, signature: 'fallback-signature' });
+      expect(signed).to.deep.equal({ ...dto, prefix, signature: personalSignature });
+    });
+
+    it('normalizes the selected eth account and classifies non-Error fallback failures', async () => {
+      const requests = installGalaWallet(async (request) => {
+        if (request.params?.[3] === 'native') return rejectWithValue('unsupported scheme');
+        return personalSignature;
+      });
+      const signer = new GalaWalletSigner(`eth|${walletAddress}`);
+      await signer.signObject('Trade', dto);
+      expect(requests[0]?.params?.[1]).to.equal(walletAddress);
+
+      installGalaWallet(async (request) => {
+        if (request.params?.[3] === 'native') return rejectWithValue({ message: 'unknown scheme' });
+        return personalSignature;
+      });
+      await new GalaWalletSigner(walletAddress).signObject('Trade', dto);
+
+      installGalaWallet(async (request) => {
+        if (request.params?.[3] === 'native') return rejectWithValue({ message: 42 });
+        return personalSignature;
+      });
+      const failed = await new GalaWalletSigner(walletAddress)
+        .signObject('Trade', dto)
+        .catch((error: unknown) => error);
+      expect(failed).to.have.property('message', 42);
+      expect(() => new GalaWalletSigner('not-an-ethereum-account')).to.throw(
+        'selected Ethereum account',
+      );
     });
   });
 
@@ -158,10 +194,10 @@ describe('signers', () => {
       const provider = {
         request: async (request: WalletRequest): Promise<unknown> => {
           requests.push(request);
-          return 'browser-signature';
+          return personalSignature;
         },
       };
-      const signer = new BrowserWalletSigner(provider, 'eth|0xabc');
+      const signer = new BrowserWalletSigner(provider, walletAddress);
       const prefix = calculatePersonalSignPrefix(dto);
 
       const signed = await signer.signObject('Trade', dto);
@@ -169,15 +205,15 @@ describe('signers', () => {
       expect(requests).to.deep.equal([
         {
           method: 'personal_sign',
-          params: [serialize({ ...dto, prefix }), 'eth|0xabc'],
+          params: [serialize({ ...dto, prefix }), walletAddress],
         },
       ]);
-      expect(signed).to.deep.equal({ ...dto, prefix, signature: 'browser-signature' });
+      expect(signed).to.deep.equal({ ...dto, prefix, signature: personalSignature });
     });
 
     it('rejects an invalid personal-sign result', async () => {
       const provider = { request: async (): Promise<unknown> => 42 };
-      const error = await new BrowserWalletSigner(provider, 'eth|0xabc')
+      const error = await new BrowserWalletSigner(provider, walletAddress)
         .signObject('Trade', dto)
         .catch((caught: unknown) => caught);
       expect(error).to.have.property('code', 'INVALID_SIGNATURE');

@@ -1,17 +1,28 @@
 import BigNumber from 'bignumber.js';
 import type { NumericAmount } from '../types/amounts.js';
-import { ALL_FEE_TIERS } from '../types/fees.js';
+import type { FEE_TIER } from '../types/fees.js';
 import { orderSymbols, readOrderedSymbols, type TokenRef } from '../utils/ordering.js';
-import { validateNumericAmount } from '../utils/validation.js';
+import { validateFee, validateNumericAmount } from '../utils/validation.js';
 import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 import type { GalaChainSigner } from './signers.js';
 import type { SubmittedTransaction } from './submitted_transaction.js';
+import type { IndexedTransaction } from '../types/v2_results.js';
 import type { Symbols } from './symbols.js';
 
-type SwapAmount =
-  | { exactIn: NumericAmount; amountOutMinimum?: NumericAmount }
-  | { exactOut: NumericAmount; amountInMaximum?: NumericAmount };
+export type SwapAmount =
+  | {
+      exactIn: NumericAmount;
+      exactOut?: never;
+      amountOutMinimum?: NumericAmount;
+      amountInMaximum?: never;
+    }
+  | {
+      exactIn?: never;
+      exactOut: NumericAmount;
+      amountOutMinimum?: never;
+      amountInMaximum?: NumericAmount;
+    };
 type SwapGateway = Pick<ChainGateway, 'submit'>;
 type SwapSymbols = Pick<Symbols, 'resolve'>;
 
@@ -46,9 +57,9 @@ export class Swaps {
   public async swap(
     tokenIn: TokenRef,
     tokenOut: TokenRef,
-    fee: number,
+    fee: FEE_TIER,
     amount: SwapAmount,
-  ): Promise<SubmittedTransaction> {
+  ): Promise<SubmittedTransaction<IndexedTransaction>> {
     validateFee(fee);
 
     const dto = await this.buildTradeDto(tokenIn, tokenOut, fee, amount);
@@ -62,7 +73,7 @@ export class Swaps {
   private async buildTradeDto(
     tokenIn: TokenRef,
     tokenOut: TokenRef,
-    fee: number,
+    fee: FEE_TIER,
     amount: SwapAmount,
   ): Promise<Record<string, unknown>> {
     const tokenInSymbol = await resolveSymbol(this.symbols, tokenIn);
@@ -93,12 +104,6 @@ export class Swaps {
       }
     }
     return dto;
-  }
-}
-
-function validateFee(fee: number): void {
-  if (!ALL_FEE_TIERS.some((tier) => Number(tier) === fee)) {
-    throw new GSwapSDKError(`Invalid fee tier: ${fee}`, 'VALIDATION_ERROR', { fee });
   }
 }
 

@@ -148,6 +148,8 @@ describe('Positions v2', () => {
       data: [
         {
           pool: 'GALA$GUSDC$3000',
+          token0CompositeKey: 'GALA$Unit$none$none',
+          token1CompositeKey: 'GUSDC$Unit$none$none',
           token0Symbol: 'GALA',
           token1Symbol: 'GUSDC',
           fee: 3000,
@@ -168,6 +170,8 @@ describe('Positions v2', () => {
     expect(result).to.deep.equal([
       {
         pool: 'GALA$GUSDC$3000',
+        token0CompositeKey: 'GALA$Unit$none$none',
+        token1CompositeKey: 'GUSDC$Unit$none$none',
         token0Symbol: 'GALA',
         token1Symbol: 'GUSDC',
         fee: 3000,
@@ -196,6 +200,8 @@ describe('Positions v2', () => {
         pool: 'GALA$GUSDC$3000',
         token0Symbol: 'GALA',
         token1Symbol: 'GUSDC',
+        token0CompositeKey: 'GALA$Unit$none$none',
+        token1CompositeKey: 'GUSDC$Unit$none$none',
         fee: 3000,
         owner: 'client|012345678901234567890123',
         tickLower: -19200,
@@ -459,7 +465,7 @@ describe('Positions v2', () => {
       .addLiquidityByPrice({
         token0: 'GALA',
         token1: 'GUSDC',
-        fee: 1,
+        fee: 1 as never,
         minPrice: '1' as PriceIn,
         maxPrice: '2' as PriceIn,
         amount: '1',
@@ -531,6 +537,10 @@ describe('Positions v2', () => {
       .createPool({ token0: 'GALA', token1: 'GUSDC', fee: 3000, startingPrice: '0' })
       .catch((error: unknown) => error);
     expect((badPrice as GSwapSDKError).message).to.include('finite and positive');
+    const numericPrice = await fixture.positions
+      .createPool({ token0: 'GALA', token1: 'GUSDC', fee: 3000, startingPrice: 1 as never })
+      .catch((error: unknown) => error);
+    expect((numericPrice as GSwapSDKError).message).to.include('JavaScript number');
     await fixture.positions.createPool({
       token0: 'NEW|Unit|none|none',
       token1: 'GUSDC',

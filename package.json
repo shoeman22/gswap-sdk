@@ -2,7 +2,7 @@
   "name": "@gala-chain/gswap-sdk",
   "version": "1.0.0-rc.1",
   "description": "A source development kit for interacting with GSwap.",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -36,7 +36,9 @@
     "check:coverage:goal": "npm run test:cov && npm run coverage:goal",
     "check:clones": "jscpd src tests --min-lines 12 --min-tokens 70 --threshold 0 --reporters console",
     "check:strict": "npm run typecheck && npm run typecheck:tests && npm run lint && npm run check:clones",
-    "check:all": "npm run check:strict && npm run check:coverage:goal && npm run build",
+    "check:all": "npm run check:strict && npm run check:coverage:goal && npm run build && npm run check:examples && npm run check:pack",
+    "check:examples": "tsx scripts/check-examples.ts",
+    "check:pack": "tsx scripts/packed-smoke.ts",
     "clean": "rm -rf dist",
     "docs:build": "cd docs && npm run generate-typedoc && npm run build",
     "docs:dev": "cd docs && npm run start",
@@ -92,9 +94,16 @@
     "@gala-chain/api": "^2.3.2",
     "@gala-chain/connect": "^2.3.2",
     "bignumber.js": "^9.3.0",
-    "debug": "^4.4.1"
+    "debug": "^4.4.1",
+    "decimal.js": "^10.6.0"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "overrides": {
+    "bn.js": "^5.2.3",
+    "validator": "^13.15.22",
+    "ws": "^8.21.0",
+    "yaml": "^2.8.3"
   }
 }

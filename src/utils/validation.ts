@@ -1,12 +1,22 @@
 import BigNumber from 'bignumber.js';
 import { GSwapSDKError } from '../classes/gswap_sdk_error.js';
 import type { NumericAmount } from '../types/amounts.js';
+import { ALL_FEE_TIERS } from '../types/fees.js';
+import type { FEE_TIER } from '../types/fees.js';
+import { GC_MAX_TICK, GC_MIN_TICK } from './ticks.js';
 
 export function validateNumericAmount(
   amount: NumericAmount,
   parameterName: string,
   allowZero = false,
 ): void {
+  if (typeof amount === 'number') {
+    throw new GSwapSDKError(
+      `Invalid ${parameterName}: use a decimal string or BigNumber, not a JavaScript number`,
+      'VALIDATION_ERROR',
+      { type: 'INVALID_NUMERIC_AMOUNT', parameterName, value: amount, reason: 'number_input' },
+    );
+  }
   const bnAmount = BigNumber(amount);
 
   if (!bnAmount.isFinite()) {
@@ -50,6 +60,13 @@ export function validatePriceValues(
   lowerPrice: NumericAmount,
   upperPrice: NumericAmount,
 ): void {
+  if ([spotPrice, lowerPrice, upperPrice].some((value) => typeof value === 'number')) {
+    throw new GSwapSDKError(
+      'Invalid price values: use decimal strings or BigNumber values, not JavaScript numbers',
+      'VALIDATION_ERROR',
+      { type: 'INVALID_NUMERIC_AMOUNT', reason: 'number_input' },
+    );
+  }
   const bnSpotPrice = BigNumber(spotPrice);
   const bnLowerPrice = BigNumber(lowerPrice);
   let bnUpperPrice = BigNumber(upperPrice);
@@ -124,27 +141,31 @@ export function validateTickRange(tickLower: number, tickUpper: number): void {
     );
   }
 
-  if (tickLower < -886800 || tickUpper > 886800) {
+  if (tickLower < GC_MIN_TICK || tickUpper > GC_MAX_TICK) {
     throw new GSwapSDKError(
-      'Invalid tick range: ticks must be between -886800 and 886800',
+      `Invalid tick range: ticks must be between ${GC_MIN_TICK} and ${GC_MAX_TICK}`,
       'VALIDATION_ERROR',
       {
         type: 'INVALID_TICK_BOUNDS',
         tickLower,
         tickUpper,
-        minTick: -886800,
-        maxTick: 886800,
+        minTick: GC_MIN_TICK,
+        maxTick: GC_MAX_TICK,
       },
     );
   }
 }
 
-export function validateFee(fee: number): void {
-  if (!Number.isInteger(fee) || fee < 0) {
-    throw new GSwapSDKError('Invalid fee: must be a non-negative integer', 'VALIDATION_ERROR', {
-      type: 'INVALID_FEE',
-      value: fee,
-    });
+export function validateFee(fee: number): asserts fee is FEE_TIER {
+  if (!ALL_FEE_TIERS.some((tier) => Number(tier) === fee)) {
+    throw new GSwapSDKError(
+      'Invalid fee tier: must be one of 0, 500, 3000, or 10000',
+      'VALIDATION_ERROR',
+      {
+        type: 'INVALID_FEE',
+        value: fee,
+      },
+    );
   }
 }
 

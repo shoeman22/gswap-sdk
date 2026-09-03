@@ -7,12 +7,12 @@ sidebar_position: 2
 The v2 contract has one signature scheme per signer type. The SDK signs the
 unsigned DTO exactly as it will be posted to the Chain Gateway.
 
-| Signer | Signature | Alias resolved by the chain |
+| Signer | Signature | Account/address input |
 | --- | --- | --- |
-| `PrivateKeySigner` | GalaChain native `signatures.getSignature` | `client|&lt;24-hex&gt;` |
-| `GalaWalletSigner` on current wallets | `gala_signChainDto` with `native` | Registered `client|...` |
-| `GalaWalletSigner` on older supported wallets | Personal-sign fallback | Bare `eth|&lt;40-hex&gt;` |
-| `BrowserWalletSigner` | EIP-1193 `personal_sign` with the SDK prefix | Bare `eth|&lt;40-hex&gt;` |
+| `PrivateKeySigner` | GalaChain native `signatures.getSignature` | Recovered from the private key |
+| `GalaWalletSigner` on current wallets | `gala_signChainDto` with `native` | Selected `0x&lt;40-hex&gt;` account (`eth|0x...` accepted) |
+| `GalaWalletSigner` on older supported wallets | Personal-sign fallback | The same selected Ethereum account |
+| `BrowserWalletSigner` | EIP-1193 `personal_sign` with the SDK prefix | Selected `0x&lt;40-hex&gt;` account |
 
 Native signatures have no prefix, EIP-712 domain, or typed-data envelope.
 Personal-sign signatures cover the serialized DTO with the calculated
@@ -25,13 +25,13 @@ signer reliably for the current tick-carrying DTOs.
 const gSwap = new GSwap({
   env: 'stage',
   signer: new PrivateKeySigner(process.env.GALACHAIN_PRIVATE_KEY!),
-  walletAddress: 'client|635f048ab243d7eb7f5ba044',
+  walletAddress: '0x0123456789012345678901234567890123456789',
 });
 ```
 
-The key must be registered for the native `client|...` alias used by the
-application. The SDK does not add `signerAddress` or `signerPublicKey` hints to
-the DTO.
+The native signature identifies the key to the chain. `walletAddress`, when
+provided, is the selected Ethereum account used for gateway attribution; the
+SDK does not add `signerAddress` or `signerPublicKey` hints to the DTO.
 
 ## Gala Wallet version note
 
@@ -41,16 +41,15 @@ Current Gala Wallet builds support the four-parameter call:
 gala_signChainDto([serialize(dto), address, methodName, 'native'])
 ```
 
-The SDK falls back for older wallet builds to the two-parameter personal-sign
-contract. That fallback is intentionally different from native signing: it
-recovers the wallet's bare `eth|...` identity. Upgrade the wallet when a
-native `client|...` identity is required.
+The SDK falls back for older wallet builds to the three-parameter
+`gala_signChainDto` contract without the final `native` scheme parameter. The
+selected Ethereum account remains the same in both calls.
 
 ## Browser wallets
 
-Pass an EIP-1193 provider and the selected address to `BrowserWalletSigner`.
-The signer requests `personal_sign` and sends `{ ...dto, prefix, signature }`
-to the gateway. The address must be the corresponding bare `eth|...` alias.
+Pass an EIP-1193 provider and the selected `0x` Ethereum account to
+`BrowserWalletSigner`. The signer requests `personal_sign` and sends
+`{ ...dto, prefix, signature }` to the gateway.
 
 Never mix a personal-sign signature with a native alias, or a native signature
 with an `eth|...` identity. A mismatch is reported as `SIGNER_MISMATCH` or

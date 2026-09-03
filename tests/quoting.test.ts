@@ -132,7 +132,7 @@ describe('Quoting', () => {
       .catch((error: unknown) => error);
     expect((failedError as GSwapSDKError).code).to.equal('HTTP_ERROR');
     const invalidFee = await service(quoteBody)
-      .quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1', 1)
+      .quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1', 1 as never)
       .catch((error: unknown) => error);
     expect((invalidFee as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
 
@@ -161,5 +161,39 @@ describe('Quoting', () => {
       .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
       .catch((error: unknown) => error);
     expect((unresolvedError as GSwapSDKError).code).to.equal('SYMBOL_NOT_FOUND');
+  });
+
+  it('handles missing square-root prices and nested backend messages', async () => {
+    const missingPrice = service({
+      ...quoteBody,
+      data: { ...quoteBody.data, currentSqrtPrice: undefined, newSqrtPrice: undefined },
+    });
+    const quote = await missingPrice.quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1');
+    expect(quote.currentPrice.isNaN()).to.equal(true);
+    expect(quote.newPrice.isNaN()).to.equal(true);
+
+    const nested = new Quoting(
+      BASE,
+      new HttpClient(async () => {
+        throw new GSwapSDKError('wrapper', 'HTTP_ERROR', { body: { message: 'backend failed' } });
+      }),
+      { resolve: resolveTestSymbol },
+    );
+    const nestedError = await nested
+      .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
+      .catch((error: unknown) => error);
+    expect((nestedError as GSwapSDKError).code).to.equal('HTTP_ERROR');
+
+    const plainBody = new Quoting(
+      BASE,
+      new HttpClient(async () => {
+        throw new GSwapSDKError('wrapper', 'HTTP_ERROR', { body: 'plain failure' });
+      }),
+      { resolve: resolveTestSymbol },
+    );
+    const plainError = await plainBody
+      .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
+      .catch((error: unknown) => error);
+    expect((plainError as GSwapSDKError).code).to.equal('HTTP_ERROR');
   });
 });

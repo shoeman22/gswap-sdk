@@ -15,6 +15,8 @@ import { quoteExactInput } from './quote_exact_input.js';
 import { quoteExactOutput } from './quote_exact_output.js';
 import { removeLiquidity } from './remove_all_liquidity.js';
 import { swapTokens } from './swap.js';
+import { parseCliArgs } from './parser.js';
+export { parseCliArgs } from './parser.js';
 
 function usage(): never {
   console.log('Usage: npm run cli -- <command> [args...]');
@@ -48,13 +50,21 @@ function usage(): never {
   throw new Error('A command is required.');
 }
 
+/** Validate CLI arity and return the command tokens consumed by the dispatcher. */
+
 function required(args: string[], count: number, command: string): void {
   if (args.length < count) throw new Error(`${command} requires at least ${count} arguments.`);
 }
 
 async function main(): Promise<void> {
-  const [command, ...args] = process.argv.slice(2);
-  if (!command) usage();
+  let parsed: { command: string; args: string[] };
+  try {
+    parsed = parseCliArgs(process.argv.slice(2));
+  } catch (error: unknown) {
+    console.error(error instanceof Error ? error.message : error);
+    usage();
+  }
+  const { command, args } = parsed;
 
   switch (command) {
     case 'quoteExactInput':

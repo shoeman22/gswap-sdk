@@ -57,7 +57,7 @@ export class GSwap {
     this.signer = options?.signer;
     this.walletAddress = options?.walletAddress;
 
-    const httpClient = new HttpClient(options?.httpRequestor);
+    const httpClient = new HttpClient(options?.httpRequestor, this.chainCallTimeoutMs);
     this.gateway = new ChainGateway({
       gatewayBaseUrl: this.gatewayBaseUrl,
       dexContractBasePath: this.dexContractBasePath,

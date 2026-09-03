@@ -11,7 +11,12 @@ export interface V2PoolWriteBase {
 
 /** A v2 trade with exactly one selected trade-side quantity. */
 export type TradeDTO = V2PoolWriteBase &
-  ({ sell0Qty: string } | { sell1Qty: string } | { buy0Qty: string } | { buy1Qty: string }) & {
+  (
+    | { sell0Qty: string; sell1Qty?: never; buy0Qty?: never; buy1Qty?: never }
+    | { sell0Qty?: never; sell1Qty: string; buy0Qty?: never; buy1Qty?: never }
+    | { sell0Qty?: never; sell1Qty?: never; buy0Qty: string; buy1Qty?: never }
+    | { sell0Qty?: never; sell1Qty?: never; buy0Qty?: never; buy1Qty: string }
+  ) & {
     amountOutMinimum?: string;
     amountInMaximum?: string;
   };
@@ -20,15 +25,20 @@ export type TradeDTO = V2PoolWriteBase &
 export type AddLiquidityDTO = V2PoolWriteBase & {
   tickLower: number;
   tickUpper: number;
-} & ({ depositQuantityToken0: string } | { depositQuantityToken1: string });
+} & (
+    | { depositQuantityToken0: string; depositQuantityToken1?: never }
+    | { depositQuantityToken0?: never; depositQuantityToken1: string }
+  );
 
 /** A v2 liquidity withdrawal; omitting both quantities closes the position. */
-export interface RemoveLiquidityDTO extends V2PoolWriteBase {
+export type RemoveLiquidityDTO = V2PoolWriteBase & {
   tickLower: number;
   tickUpper: number;
-  withdrawalQuantityToken0?: string;
-  withdrawalQuantityToken1?: string;
-}
+} & (
+    | { withdrawalQuantityToken0: string; withdrawalQuantityToken1?: never }
+    | { withdrawalQuantityToken0?: never; withdrawalQuantityToken1: string }
+    | { withdrawalQuantityToken0?: never; withdrawalQuantityToken1?: never }
+  );
 
 /** A v2 request to sweep all fees from one position. */
 export interface CollectPositionFeesDTO extends V2PoolWriteBase {
@@ -46,7 +56,10 @@ export type CreatePoolDTO = {
   isPrivate?: boolean;
   privateAccess?: string[];
   uniqueKey: string;
-} & ({ startingPrice: string } | { startingSqrtPrice: string });
+} & (
+  | { startingPrice: string; startingSqrtPrice?: never }
+  | { startingPrice?: never; startingSqrtPrice: string }
+);
 
 /** Optional page cursor accepted by chain read methods. */
 export interface PageDTO {

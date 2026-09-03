@@ -13,6 +13,7 @@ export interface PoolInfo {
   tradingFees: number;
   creator?: string;
   isPrivate?: boolean;
+  flippedFromRequest?: boolean;
 }
 
 /** Current pool price state. */

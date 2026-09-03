@@ -1,6 +1,7 @@
 import BigNumber from 'bignumber.js';
 import type { NumericAmount } from '../types/amounts.js';
 import { ALL_FEE_TIERS } from '../types/fees.js';
+import type { FEE_TIER } from '../types/fees.js';
 import type { QuoteResult } from '../types/v2_results.js';
 import type { TokenRef } from '../utils/ordering.js';
 import { validateNumericAmount } from '../utils/validation.js';
@@ -62,7 +63,7 @@ export class Quoting {
     tokenIn: TokenRef,
     tokenOut: TokenRef,
     amountIn: NumericAmount,
-    fee?: number,
+    fee?: FEE_TIER,
   ): Promise<QuoteResult> {
     validateNumericAmount(amountIn, 'amountIn');
     return this.quote(tokenIn, tokenOut, { amountIn: toDecimalString(amountIn) }, fee);
@@ -81,7 +82,7 @@ export class Quoting {
     tokenIn: TokenRef,
     tokenOut: TokenRef,
     amountOut: NumericAmount,
-    fee?: number,
+    fee?: FEE_TIER,
   ): Promise<QuoteResult> {
     validateNumericAmount(amountOut, 'amountOut');
     return this.quote(tokenIn, tokenOut, { amountOut: toDecimalString(amountOut) }, fee);
@@ -91,7 +92,7 @@ export class Quoting {
     tokenIn: TokenRef,
     tokenOut: TokenRef,
     amount: { amountIn: string } | { amountOut: string },
-    fee?: number,
+    fee?: FEE_TIER,
   ): Promise<QuoteResult> {
     validateOptionalFee(fee);
 
@@ -148,7 +149,7 @@ function mapQuoteError(
   error: unknown,
   tokenIn: TokenRef,
   tokenOut: TokenRef,
-  fee: number | undefined,
+  fee: FEE_TIER | undefined,
 ): GSwapSDKError {
   if (error instanceof GSwapSDKError) {
     const status = readStatus(error.details);
@@ -183,8 +184,8 @@ function readMessage(details: Record<string, unknown> | undefined): string | und
   return typeof message === 'string' ? message : undefined;
 }
 
-function validateOptionalFee(fee: number | undefined): void {
-  if (fee !== undefined && !ALL_FEE_TIERS.some((tier) => Number(tier) === fee)) {
+function validateOptionalFee(fee: FEE_TIER | undefined): void {
+  if (fee !== undefined && !ALL_FEE_TIERS.some((tier) => Number(tier) === Number(fee))) {
     throw new GSwapSDKError(`Invalid fee tier: ${fee}`, 'VALIDATION_ERROR', { fee });
   }
 }
