@@ -25,10 +25,38 @@ describe('Pools', () => {
     const calls: string[] = [];
     const requestor: HttpRequestor = async (url) => {
       calls.push(url);
-      return response({ status: 200, error: false, data: [{ token0: 'AAA', token1: 'BBB' }] });
+      return response({
+        status: 200,
+        error: false,
+        data: [
+          {
+            contractVersion: 'v2',
+            token0: 'AAA',
+            token1: 'BBB',
+            fee: 3000,
+            poolName: 'AAA/BBB',
+            poolRef: 'AAA$BBB$3000',
+            tickSpacing: 60,
+            protocolFees: 3,
+            tradingFees: 3000,
+          },
+        ],
+      });
     };
     const result = await new Pools(gateway(requestor), symbols()).getPools();
-    expect(result).to.deep.equal([{ token0: 'AAA', token1: 'BBB' }]);
+    expect(result).to.deep.equal([
+      {
+        contractVersion: 'v2',
+        token0: 'AAA',
+        token1: 'BBB',
+        fee: 3000,
+        poolName: 'AAA/BBB',
+        poolRef: 'AAA$BBB$3000',
+        tickSpacing: 60,
+        protocolFees: 3,
+        tradingFees: 3000,
+      },
+    ]);
     expect(calls).to.deep.equal([`${BASE}/v2/trade/pools`]);
   });
 
@@ -88,6 +116,15 @@ describe('Pools', () => {
     );
     const invalidListError = await invalidList.getPools().catch((caught: unknown) => caught);
     expect((invalidListError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+
+    const invalidRow = new Pools(
+      gateway(async () =>
+        response({ data: [{ contractVersion: 'v2', token0: 'A', token1: 'B', tvlUsd: 'bad' }] }),
+      ),
+      symbols(),
+    );
+    const invalidRowError = await invalidRow.getPools().catch((caught: unknown) => caught);
+    expect((invalidRowError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
 
     const timedGateway = new ChainGateway({
       dexBackendBaseUrl: BASE,

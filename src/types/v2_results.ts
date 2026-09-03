@@ -16,6 +16,36 @@ export interface PoolInfo {
   flippedFromRequest?: boolean;
 }
 
+/** Pool summary returned by the backend pool-list route. */
+export interface PoolListInfo {
+  contractVersion: 'v2';
+  token0: string;
+  token1: string;
+  token0CompositeKey?: string | undefined;
+  token1CompositeKey?: string | undefined;
+  fee: number;
+  poolName: string;
+  poolRef: string;
+  tickSpacing: number;
+  protocolFees: number;
+  tradingFees: number;
+  creator?: string | undefined;
+  price?: string | undefined;
+  sqrtPrice?: string | undefined;
+  tick?: number | undefined;
+  token0Tvl?: string | undefined;
+  token1Tvl?: string | undefined;
+  tvlUsd?: number | undefined;
+  volume1d?: number | undefined;
+  volume7d?: number | undefined;
+  volume30d?: number | undefined;
+  trades1d?: number | undefined;
+  fee24h?: number | undefined;
+  apr1d?: number | undefined;
+  token0Price?: number | undefined;
+  token1Price?: number | undefined;
+}
+
 /** Current pool price state. */
 export interface Slot0 {
   token0: string;

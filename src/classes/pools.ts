@@ -1,5 +1,5 @@
 import type { FEE_TIER } from '../types/fees.js';
-import type { CompositePool, PoolInfo, Slot0 } from '../types/v2_results.js';
+import type { CompositePool, PoolInfo, PoolListInfo, Slot0 } from '../types/v2_results.js';
 import { orderSymbols, readOrderedSymbols, type TokenRef } from '../utils/ordering.js';
 import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
@@ -44,7 +44,7 @@ export class Pools {
    * console.log(pools.length);
    * ```
    */
-  public async getPools(options?: { signal?: AbortSignal | undefined }): Promise<PoolInfo[]> {
+  public async getPools(options?: { signal?: AbortSignal | undefined }): Promise<PoolListInfo[]> {
     const response = await this.http.sendGetRequest<BackendEnvelope<unknown>>(
       this.gateway.dexBackendBaseUrl,
       '/v2/trade',
@@ -52,12 +52,12 @@ export class Pools {
       undefined,
       options?.signal === undefined ? undefined : { signal: options.signal },
     );
-    if (!Array.isArray(response.data)) {
+    if (!Array.isArray(response.data) || !response.data.every(isPoolListInfo)) {
       throw new GSwapSDKError('Backend returned an invalid pool list.', 'INVALID_CHAIN_RESPONSE', {
         data: response.data,
       });
     }
-    return response.data as PoolInfo[];
+    return response.data;
   }
 
   /**
@@ -147,4 +147,53 @@ async function resolveSymbol(symbols: PoolSymbols, token: TokenRef): Promise<str
   throw new GSwapSDKError('Token could not be resolved to a trading symbol.', 'SYMBOL_NOT_FOUND', {
     token,
   });
+}
+
+function isPoolListInfo(value: unknown): value is PoolListInfo {
+  if (typeof value !== 'object' || value === null) return false;
+  const row = value as Record<string, unknown>;
+  const requiredNumbers = ['fee', 'tickSpacing', 'protocolFees', 'tradingFees'];
+  const optionalStrings = [
+    'token0CompositeKey',
+    'token1CompositeKey',
+    'creator',
+    'price',
+    'sqrtPrice',
+    'token0Tvl',
+    'token1Tvl',
+  ];
+  const optionalNumbers = [
+    'tick',
+    'tvlUsd',
+    'volume1d',
+    'volume7d',
+    'volume30d',
+    'trades1d',
+    'fee24h',
+    'apr1d',
+    'token0Price',
+    'token1Price',
+  ];
+  return (
+    row['contractVersion'] === 'v2' &&
+    typeof row['token0'] === 'string' &&
+    typeof row['token1'] === 'string' &&
+    typeof row['poolName'] === 'string' &&
+    typeof row['poolRef'] === 'string' &&
+    requiredNumbers.every((key) => isFiniteNumber(row[key])) &&
+    optionalStrings.every((key) => isOptionalString(row[key])) &&
+    optionalNumbers.every((key) => isOptionalNumber(row[key]))
+  );
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === 'string';
+}
+
+function isOptionalNumber(value: unknown): value is number | undefined {
+  return value === undefined || isFiniteNumber(value);
 }
