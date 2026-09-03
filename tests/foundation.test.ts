@@ -82,13 +82,15 @@ describe('v2 foundation', () => {
       .catch((caught: unknown) => caught);
     expect(error).to.be.instanceOf(GSwapSDKError);
     expect((error as GSwapSDKError).code).to.equal('RATE_LIMITED');
-    expect((error as GSwapSDKError).details?.retryAfterMs).to.equal(30_000);
+    expect((error as GSwapSDKError).details?.['retryAfterMs']).to.equal(30_000);
   });
 
   it('unwraps chain reads and follows nextPageBookmark', async () => {
     const bodies: unknown[] = [];
     const httpRequestor: HttpRequestor = async (_url, options) => {
-      bodies.push(JSON.parse(String(options?.body)) as unknown);
+      const body = options?.body;
+      if (typeof body !== 'string') throw new Error('Expected a serialized request body.');
+      bodies.push(JSON.parse(body) as unknown);
       const page =
         bodies.length === 1 || bodies.length === 2
           ? { results: [{ symbol: 'A' }], nextPageBookmark: 'next' }

@@ -68,6 +68,30 @@ describe('signers', () => {
   });
 
   describe('GalaWalletSigner', () => {
+    it('reports unavailable wallets and invalid native signatures', async () => {
+      const unavailable = await new GalaWalletSigner(walletAddress)
+        .signObject('Trade', dto)
+        .catch((error: unknown) => error);
+      expect(unavailable).to.have.property('code', 'GALA_WALLET_NOT_AVAILABLE');
+
+      installGalaWallet(async () => 42);
+      const invalid = await new GalaWalletSigner(walletAddress)
+        .signObject('Trade', dto)
+        .catch((error: unknown) => error);
+      expect(invalid).to.have.property('code', 'INVALID_SIGNATURE');
+    });
+
+    it('recognizes non-Error unsupported-scheme responses before fallback', async () => {
+      const requests = installGalaWallet(async (request) => {
+        if (request.params?.[3] === 'native')
+          return Promise.reject(new Error('unsupported scheme'));
+        return 'fallback-signature';
+      });
+      const signed = await new GalaWalletSigner(walletAddress).signObject('Trade', dto);
+      expect(requests).to.have.length(2);
+      expect(signed.signature).to.equal('fallback-signature');
+    });
+
     it('uses native signing with the exact four-parameter request', async () => {
       const requests = installGalaWallet(async () => 'native-signature');
       const signer = new GalaWalletSigner(walletAddress);
@@ -149,6 +173,14 @@ describe('signers', () => {
         },
       ]);
       expect(signed).to.deep.equal({ ...dto, prefix, signature: 'browser-signature' });
+    });
+
+    it('rejects an invalid personal-sign result', async () => {
+      const provider = { request: async (): Promise<unknown> => 42 };
+      const error = await new BrowserWalletSigner(provider, 'eth|0xabc')
+        .signObject('Trade', dto)
+        .catch((caught: unknown) => caught);
+      expect(error).to.have.property('code', 'INVALID_SIGNATURE');
     });
   });
 });

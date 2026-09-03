@@ -3,10 +3,9 @@ import BigNumber from 'bignumber.js';
 import { HttpClient } from '../src/classes/http_client.js';
 import { GSwapSDKError } from '../src/classes/gswap_sdk_error.js';
 import { Quoting } from '../src/classes/quoting.js';
-import { Symbols } from '../src/classes/symbols.js';
+import type { Symbols } from '../src/classes/symbols.js';
 import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
-import type { TradingSymbol } from '../src/types/v2_results.js';
-import type { TokenRef } from '../src/utils/ordering.js';
+import { resolveTestSymbol } from './helpers.js';
 
 const BASE = 'https://swap.example.test';
 const TOKEN_IN = 'GALA|Unit|none|none';
@@ -29,22 +28,7 @@ function service(body: unknown, status = 200): { quoting: Quoting; calls: string
     return response(body, status);
   };
   const symbols: Pick<Symbols, 'resolve'> = {
-    resolve: async (token: TokenRef): Promise<TradingSymbol> => {
-      const symbol =
-        typeof token === 'string'
-          ? token.includes('|')
-            ? (token.split('|')[0] ?? token)
-            : token
-          : token.collection;
-      return {
-        symbol,
-        collection: symbol,
-        category: 'Unit',
-        type: 'none',
-        additionalKey: 'none',
-        decimals: 18,
-      };
-    },
+    resolve: resolveTestSymbol,
   };
   return {
     quoting: new Quoting(BASE, new HttpClient(requestor), symbols),
@@ -123,5 +107,59 @@ describe('Quoting', () => {
       .catch((cause: unknown) => cause);
     expect(error).to.be.instanceOf(GSwapSDKError);
     expect((error as GSwapSDKError).code).to.equal('INSUFFICIENT_LIQUIDITY');
+  });
+
+  it('maps direct and inverse prices, backend message envelopes, and transport failures', async () => {
+    const direct = service({
+      ...quoteBody,
+      data: { ...quoteBody.data, currentPrice: '1', newPrice: '1.1' },
+    });
+    const directQuote = await direct.quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1');
+    expect(directQuote.currentPrice.toFixed()).to.equal('1');
+    expect(directQuote.newPrice.toFixed()).to.equal('1.1');
+
+    const inverse = service({
+      ...quoteBody,
+      data: { ...quoteBody.data, tokenInIsToken0: false, currentSqrtPrice: '2', newSqrtPrice: '1' },
+    });
+    const inverseQuote = await inverse.quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1');
+    expect(inverseQuote.currentPrice.toFixed()).to.equal('0.25');
+    expect(inverseQuote.newPrice.toFixed()).to.equal('1');
+
+    const failed = service({ message: 'backend failed' }, 500);
+    const failedError = await failed.quoting
+      .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
+      .catch((error: unknown) => error);
+    expect((failedError as GSwapSDKError).code).to.equal('HTTP_ERROR');
+    const invalidFee = await service(quoteBody)
+      .quoting.quoteExactInput(TOKEN_IN, TOKEN_OUT, '1', 1)
+      .catch((error: unknown) => error);
+    expect((invalidFee as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
+
+    const transport = new Quoting(
+      BASE,
+      new HttpClient(async () => {
+        throw new Error('offline');
+      }),
+      { resolve: resolveTestSymbol },
+    );
+    const transportError = await transport
+      .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
+      .catch((error: unknown) => error);
+    expect((transportError as GSwapSDKError).code).to.equal('HTTP_ERROR');
+    const unresolved = new Quoting(BASE, new HttpClient(async () => response(quoteBody)), {
+      resolve: async () => ({
+        symbol: '',
+        collection: 'A',
+        category: 'Unit',
+        type: 'none',
+        additionalKey: 'none',
+        decimals: 18,
+      }),
+    });
+    const unresolvedError = await unresolved
+      .quoteExactInput(TOKEN_IN, TOKEN_OUT, '1')
+      .catch((error: unknown) => error);
+    expect((unresolvedError as GSwapSDKError).code).to.equal('SYMBOL_NOT_FOUND');
   });
 });

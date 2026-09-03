@@ -70,9 +70,9 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_NUMERIC_AMOUNT');
-        expect((error as GSwapSDKError).details?.parameterName).to.equal('testAmount');
-        expect((error as GSwapSDKError).details?.reason).to.equal('negative');
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_NUMERIC_AMOUNT');
+        expect((error as GSwapSDKError).details?.['parameterName']).to.equal('testAmount');
+        expect((error as GSwapSDKError).details?.['reason']).to.equal('negative');
       }
     });
   });
@@ -108,9 +108,9 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_PRICE_RANGE');
-        expect((error as GSwapSDKError).details?.lowerPrice).to.equal('2');
-        expect((error as GSwapSDKError).details?.upperPrice).to.equal('1');
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_PRICE_RANGE');
+        expect((error as GSwapSDKError).details?.['lowerPrice']).to.equal('2');
+        expect((error as GSwapSDKError).details?.['upperPrice']).to.equal('1');
       }
     });
 
@@ -121,8 +121,8 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_PRICE_VALUES');
-        expect((error as GSwapSDKError).details?.spotPrice).to.equal('-1');
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_PRICE_VALUES');
+        expect((error as GSwapSDKError).details?.['spotPrice']).to.equal('-1');
       }
     });
   });
@@ -167,9 +167,9 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_TICK_RANGE');
-        expect((error as GSwapSDKError).details?.tickLower).to.equal(1000);
-        expect((error as GSwapSDKError).details?.tickUpper).to.equal(999);
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_TICK_RANGE');
+        expect((error as GSwapSDKError).details?.['tickLower']).to.equal(1000);
+        expect((error as GSwapSDKError).details?.['tickUpper']).to.equal(999);
       }
     });
 
@@ -180,10 +180,10 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_TICK_BOUNDS');
-        expect((error as GSwapSDKError).details?.tickLower).to.equal(-886801);
-        expect((error as GSwapSDKError).details?.minTick).to.equal(-886800);
-        expect((error as GSwapSDKError).details?.maxTick).to.equal(886800);
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_TICK_BOUNDS');
+        expect((error as GSwapSDKError).details?.['tickLower']).to.equal(-886801);
+        expect((error as GSwapSDKError).details?.['minTick']).to.equal(-886800);
+        expect((error as GSwapSDKError).details?.['maxTick']).to.equal(886800);
       }
     });
 
@@ -194,8 +194,8 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_TICK_VALUES');
-        expect((error as GSwapSDKError).details?.tickLower).to.equal(-1000.5);
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_TICK_VALUES');
+        expect((error as GSwapSDKError).details?.['tickLower']).to.equal(-1000.5);
       }
     });
   });
@@ -229,8 +229,8 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_FEE');
-        expect((error as GSwapSDKError).details?.value).to.equal(-1);
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_FEE');
+        expect((error as GSwapSDKError).details?.['value']).to.equal(-1);
       }
     });
   });
@@ -264,8 +264,8 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_TICK_SPACING');
-        expect((error as GSwapSDKError).details?.value).to.equal(0);
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_TICK_SPACING');
+        expect((error as GSwapSDKError).details?.['value']).to.equal(0);
       }
     });
   });
@@ -296,9 +296,9 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_TOKEN_DECIMALS');
-        expect((error as GSwapSDKError).details?.parameterName).to.equal('testDecimals');
-        expect((error as GSwapSDKError).details?.value).to.equal(-1);
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_TOKEN_DECIMALS');
+        expect((error as GSwapSDKError).details?.['parameterName']).to.equal('testDecimals');
+        expect((error as GSwapSDKError).details?.['value']).to.equal(-1);
       }
     });
   });
@@ -319,12 +319,10 @@ describe('Validation Utilities', () => {
     });
 
     it('should reject non-string addresses', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect(() => validateWalletAddress(null as any)).to.throw(
+      expect(() => validateWalletAddress(null as unknown as string)).to.throw(
         'Invalid wallet address: must be a non-empty string',
       );
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect(() => validateWalletAddress(undefined as any)).to.throw(
+      expect(() => validateWalletAddress(undefined as unknown as string)).to.throw(
         'Invalid wallet address: No wallet address provided',
       );
     });
@@ -336,8 +334,8 @@ describe('Validation Utilities', () => {
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-        expect((error as GSwapSDKError).details?.type).to.equal('INVALID_WALLET_ADDRESS');
-        expect((error as GSwapSDKError).details?.value).to.equal('');
+        expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_WALLET_ADDRESS');
+        expect((error as GSwapSDKError).details?.['value']).to.equal('');
       }
     });
   });

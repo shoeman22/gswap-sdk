@@ -6,8 +6,7 @@ import { Swaps } from '../src/classes/swaps.js';
 import type { GalaChainSigner } from '../src/classes/signers.js';
 import type { Symbols } from '../src/classes/symbols.js';
 import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
-import type { TradingSymbol } from '../src/types/v2_results.js';
-import type { TokenRef } from '../src/utils/ordering.js';
+import { resolveTestSymbol } from './helpers.js';
 
 const TOKEN_A = 'AAA|Unit|none|none';
 const TOKEN_B = 'BBB|Unit|none|none';
@@ -55,22 +54,7 @@ function service(): {
     },
   };
   const symbols: Pick<Symbols, 'resolve'> = {
-    resolve: async (token: TokenRef): Promise<TradingSymbol> => {
-      const symbol =
-        typeof token === 'string'
-          ? token.includes('|')
-            ? (token.split('|')[0] ?? token)
-            : token
-          : token.collection;
-      return {
-        symbol,
-        collection: symbol,
-        category: 'Unit',
-        type: 'none',
-        additionalKey: 'none',
-        decimals: 18,
-      };
-    },
+    resolve: resolveTestSymbol,
   };
   const swaps = new Swaps(gateway, symbols, signer, 'client|012345678901234567890123');
   return { swaps, gateway, symbols, submissions, signed };
@@ -101,6 +85,35 @@ describe('Swaps', () => {
     const { swaps, submissions } = service();
     await swaps.swap(TOKEN_A, TOKEN_B, 500, { exactIn: 10, amountOutMinimum: 0 });
     expect(submissions[0]?.body).to.include({ sell0Qty: '10', amountOutMinimum: '0' });
+  });
+
+  it('builds exact-output slippage and rejects non-positive quantities', async () => {
+    const { swaps, submissions } = service();
+    await swaps.swap(TOKEN_B, TOKEN_A, 10000, { exactOut: '2.50', amountInMaximum: 3 });
+    expect(submissions[0]?.body).to.include({ buy0Qty: '2.5', amountInMaximum: '3' });
+    const invalid = await swaps
+      .swap(TOKEN_A, TOKEN_B, 500, { exactIn: 0 })
+      .catch((error: unknown) => error);
+    expect((invalid as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
+  });
+
+  it('rejects a resolver that does not return a trading symbol', async () => {
+    const { gateway, signed } = service();
+    const swaps = new Swaps(gateway, {
+      resolve: async () => ({
+        symbol: '',
+        collection: 'A',
+        category: 'Unit',
+        type: 'none',
+        additionalKey: 'none',
+        decimals: 18,
+      }),
+    });
+    const error = await swaps
+      .swap(TOKEN_A, TOKEN_B, 500, { exactIn: '1' })
+      .catch((caught: unknown) => caught);
+    expect((error as GSwapSDKError).code).to.equal('SYMBOL_NOT_FOUND');
+    expect(signed).to.have.length(0);
   });
 
   it('rejects unsupported fee tiers and missing signers', async () => {
