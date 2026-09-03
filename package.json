@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "test": "mocha --spec tests/**/*.test.ts",
+    "test:live": "TS_NODE_FILES=true mocha --timeout 300000 --spec 'tests/live/**/*.live.ts'",
     "test:cov": "c8 --reporter=text-summary --reporter=json-summary --all --src src --include 'src/**/*.ts' --exclude 'src/types/**' mocha --spec 'tests/**/*.test.ts'",
     "test:debug:nospec": "node -r  ts-node/register node_modules/.bin/mocha --exit --timeout 120000",
     "lint": "eslint src tests examples/cli/src --ext .ts,.js --max-warnings=0",
