@@ -1,132 +1,137 @@
 import BigNumber from 'bignumber.js';
-import { NumericAmount } from '../types/amounts.js';
-import { GalaChainTokenClassKey } from '../types/token.js';
-import { getTokenOrdering, parseTokenClassKey, stringifyTokenClassKey } from '../utils/token.js';
-import { validateFee, validateNumericAmount, validateWalletAddress } from '../utils/validation.js';
-import { Bundler } from './bundler.js';
+import type { NumericAmount } from '../types/amounts.js';
+import type { ResolvedEnv } from '../types/env.js';
+import { ALL_FEE_TIERS } from '../types/fees.js';
+import type { TokenRef } from '../types/v2_dtos.js';
+import { orderSymbols } from '../utils/ordering.js';
+import { validateNumericAmount } from '../utils/validation.js';
+import type { ChainGateway, SubmittedTransaction } from './gateway.js';
+import { GSwapSDKError } from './gswap_sdk_error.js';
+import { HttpClient } from './http_client.js';
+import type { GalaChainSigner } from './signers.js';
+import type { Symbols } from './symbols.js';
 
-const MIN_SQRT_PRICE_LIMIT = '0.000000000000000000094212147';
-const MAX_SQRT_PRICE_LIMIT = '18446050999999999999';
+type SwapAmount =
+  | { exactIn: NumericAmount; amountOutMinimum?: NumericAmount }
+  | { exactOut: NumericAmount; amountInMaximum?: NumericAmount };
 
-/**
- * Service for handling token swap operations.
- */
+/** Executes current-contract Trade operations through the Chain Gateway. */
 export class Swaps {
+  /**
+   * Creates a swap service.
+   *
+   * @example
+   * ```ts
+   * const swaps = new Swaps(gateway, symbols, http, urls, { signer });
+   * ```
+   */
   constructor(
-    private readonly bundlerService: Bundler,
-    private readonly options?: {
-      walletAddress?: string | undefined;
-    },
+    private readonly gateway: ChainGateway,
+    private readonly symbols: Symbols,
+    private readonly http: HttpClient,
+    private readonly urls: ResolvedEnv,
+    private readonly options: { signer?: GalaChainSigner; walletAddress?: string } = {},
   ) {}
 
   /**
-   * Executes a token swap transaction.
-   * @param walletAddress - The wallet address executing the swap.
-   * @param tokenIn - The input token to sell.
-   * @param tokenOut - The output token to buy.
-   * @param fee - The pool fee tier.
-   * @param amount - Swap parameters specifying either exact input or exact output.
-   * @param amount.exactIn - For exact input swaps, the exact amount of input tokens to sell.
-   * @param amount.amountOutMinimum - For exact input swaps, the minimum amount of output tokens to buy (slippage protection).
-   * @param amount.exactOut - For exact output swaps, the exact amount of output tokens to buy.
-   * @param amount.amountInMaximum - For exact output swaps, the maximum amount of input tokens to sell (slippage protection).
-   * @returns Pending transaction.
+   * Signs and submits an exact-input or exact-output Trade DTO.
+   *
    * @example
-   * ```typescript
-   * // Exact input swap: sell 100 GALA for USDC
-   * const result = await swapsService.swap(
-   *   'GALA|Unit|none|none',
-   *   'GUSDC|Unit|none|none',
-   *   500,
-   *   { exactIn: '100', amountOutMinimum: '45' },
-   *   'eth|123...abc', // your wallet address
-   * );
-   * console.log('Swap successful:', result);
+   * ```ts
+   * const submitted = await swaps.swap('GALA', 'GUSDC', 3000, {
+   *   exactIn: '100',
+   *   amountOutMinimum: '14',
+   * });
    * ```
    */
-  async swap(
-    tokenIn: GalaChainTokenClassKey | string,
-    tokenOut: GalaChainTokenClassKey | string,
+  public async swap(
+    tokenIn: TokenRef,
+    tokenOut: TokenRef,
     fee: number,
-    amount:
-      | {
-          exactIn: NumericAmount;
-          amountOutMinimum?: NumericAmount;
-        }
-      | {
-          exactOut: NumericAmount;
-          amountInMaximum?: NumericAmount;
-        },
+    amount: SwapAmount,
     walletAddress?: string,
-  ) {
-    walletAddress = walletAddress ?? this.options?.walletAddress;
-
-    validateWalletAddress(walletAddress);
+  ): Promise<SubmittedTransaction> {
+    void this.http;
+    void this.urls;
+    void walletAddress;
     validateFee(fee);
+
+    const dto = await this.buildTradeDto(tokenIn, tokenOut, fee, amount);
+    const signer = this.options.signer;
+    if (signer === undefined) throw GSwapSDKError.noSignerError();
+    const signedDto = await signer.signObject('Trade', dto);
+    return this.gateway.submit('Trade', signedDto);
+  }
+
+  private async buildTradeDto(
+    tokenIn: TokenRef,
+    tokenOut: TokenRef,
+    fee: number,
+    amount: SwapAmount,
+  ): Promise<Record<string, unknown>> {
+    const tokenInSymbol = await resolveSymbol(this.symbols, tokenIn);
+    const tokenOutSymbol = await resolveSymbol(this.symbols, tokenOut);
+    const ordered = readOrdering(orderSymbols(tokenInSymbol, tokenOutSymbol));
+    const tokenInIsToken0 = tokenInSymbol === ordered.token0;
+
+    const dto: Record<string, unknown> = {
+      token0: ordered.token0,
+      token1: ordered.token1,
+      fee,
+      uniqueKey: `gswap-sdk-${crypto.randomUUID()}`,
+    };
 
     if ('exactIn' in amount) {
       validateNumericAmount(amount.exactIn, 'exactIn');
+      dto[tokenInIsToken0 ? 'sell0Qty' : 'sell1Qty'] = toDecimalString(amount.exactIn);
       if (amount.amountOutMinimum !== undefined) {
         validateNumericAmount(amount.amountOutMinimum, 'amountOutMinimum', true);
+        dto.amountOutMinimum = toDecimalString(amount.amountOutMinimum);
       }
     } else {
       validateNumericAmount(amount.exactOut, 'exactOut');
+      dto[tokenInIsToken0 ? 'buy1Qty' : 'buy0Qty'] = toDecimalString(amount.exactOut);
       if (amount.amountInMaximum !== undefined) {
-        validateNumericAmount(amount.amountInMaximum, 'amountInMaximum');
+        validateNumericAmount(amount.amountInMaximum, 'amountInMaximum', true);
+        dto.amountInMaximum = toDecimalString(amount.amountInMaximum);
       }
     }
-
-    const ordering = getTokenOrdering(tokenIn, tokenOut, false);
-    const zeroForOne = stringifyTokenClassKey(tokenIn) === stringifyTokenClassKey(ordering.token0);
-
-    const rawAmount =
-      'exactIn' in amount
-        ? BigNumber(amount.exactIn).toFixed()
-        : BigNumber(amount.exactOut).multipliedBy(-1).toFixed();
-    const rawAmountOutMinimum =
-      'exactIn' in amount
-        ? amount.amountOutMinimum?.toString()
-          ? BigNumber(amount.amountOutMinimum).multipliedBy(-1).toFixed()
-          : undefined
-        : BigNumber(amount.exactOut ?? 0)
-            .multipliedBy(-1)
-            .toFixed();
-    const rawAmountInMaximum =
-      'exactIn' in amount
-        ? BigNumber(amount.exactIn).toFixed()
-        : amount.amountInMaximum
-          ? BigNumber(amount.amountInMaximum).toFixed()
-          : undefined;
-
-    const toSign = {
-      token0: parseTokenClassKey(ordering.token0),
-      token1: parseTokenClassKey(ordering.token1),
-      fee: fee,
-      amount: rawAmount,
-      zeroForOne,
-      sqrtPriceLimit: ordering.zeroForOne ? MIN_SQRT_PRICE_LIMIT : MAX_SQRT_PRICE_LIMIT,
-      recipient: walletAddress,
-      amountOutMinimum: rawAmountOutMinimum,
-      amountInMaximum: rawAmountInMaximum,
-    };
-
-    const token0StringKey = stringifyTokenClassKey(ordering.token0, '$');
-    const token1StringKey = stringifyTokenClassKey(ordering.token1, '$');
-
-    const poolString = `$pool$${token0StringKey}$${token1StringKey}$${fee}`;
-    const tokenBalance0 = `$tokenBalance$${token0StringKey}$${walletAddress}`;
-    const tokenBalance1 = `$tokenBalance$${token1StringKey}$${walletAddress}`;
-    const tokenBalance0Pool = `$tokenBalance$${token0StringKey}$${poolString}`;
-    const tokenBalance1Pool = `$tokenBalance$${token1StringKey}$${poolString}`;
-
-    const stringsInstructions = [
-      poolString,
-      tokenBalance0,
-      tokenBalance1,
-      tokenBalance0Pool,
-      tokenBalance1Pool,
-    ];
-
-    return this.bundlerService.sendBundlerRequest('Swap', toSign, stringsInstructions);
+    return dto;
   }
+}
+
+function validateFee(fee: number): void {
+  if (!ALL_FEE_TIERS.some((tier) => tier === fee)) {
+    throw new GSwapSDKError(`Invalid fee tier: ${fee}`, 'VALIDATION_ERROR', { fee });
+  }
+}
+
+function toDecimalString(amount: NumericAmount): string {
+  return new BigNumber(amount).toFixed();
+}
+
+async function resolveSymbol(symbols: Symbols, token: TokenRef): Promise<string> {
+  const resolved: unknown = await symbols.resolve(token);
+  if (typeof resolved === 'string') return resolved;
+  if (typeof resolved === 'object' && resolved !== null && 'symbol' in resolved) {
+    const symbol = Reflect.get(resolved, 'symbol');
+    if (typeof symbol === 'string' && symbol.length > 0) return symbol;
+  }
+  throw new GSwapSDKError('Token could not be resolved to a trading symbol.', 'SYMBOL_NOT_FOUND', {
+    token,
+  });
+}
+
+function readOrdering(value: unknown): { token0: string; token1: string } {
+  if (Array.isArray(value) && value.length >= 2) {
+    const token0 = value[0];
+    const token1 = value[1];
+    if (typeof token0 === 'string' && typeof token1 === 'string') return { token0, token1 };
+  }
+  if (typeof value === 'object' && value !== null) {
+    const token0 = Reflect.get(value, 'token0');
+    const token1 = Reflect.get(value, 'token1');
+    if (typeof token0 === 'string' && typeof token1 === 'string') return { token0, token1 };
+  }
+  throw new GSwapSDKError('Unable to order trading symbols.', 'VALIDATION_ERROR');
 }
