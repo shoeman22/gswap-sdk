@@ -58,7 +58,7 @@ export class ChainGateway {
     }
 
     const envelope = asRecord(body);
-    const data = asRecord(envelope?.data) ?? envelope;
+    const data = asRecord(envelope?.['data']) ?? envelope;
     const transactionId = getStringProperty(data, 'transactionId');
     const mode = getStringProperty(data, 'mode');
     if (mode !== undefined && mode !== 'sync') {
@@ -78,7 +78,7 @@ export class ChainGateway {
       method,
       uniqueKey,
       transactionId: transactionId === undefined || transactionId === '' ? null : transactionId,
-      result: data?.result,
+      result: data?.['result'],
       dexBackendBaseUrl: this.dexBackendBaseUrl,
       httpRequestor: this.requestor,
       chainCallTimeoutMs: this.chainCallTimeoutMs,
@@ -102,7 +102,7 @@ export class ChainGateway {
       getStringProperty(envelope, 'ErrorKey') ?? getStringProperty(nestedError, 'ErrorKey');
     const message =
       getStringProperty(envelope, 'Message') ?? getStringProperty(nestedError, 'Message');
-    const status = envelope?.Status;
+    const status = envelope?.['Status'];
     if (status === 0 || (errorKey !== undefined && message !== undefined)) {
       throw GSwapSDKError.fromChainError(
         errorKey ?? 'CHAIN_ERROR',
@@ -122,7 +122,7 @@ export class ChainGateway {
       });
     }
 
-    return (envelope?.Data ?? envelope?.data) as T;
+    return (envelope?.['Data'] ?? envelope?.['data']) as T;
   }
 
   /** Fetch every page from a cursor-based chain read. */
@@ -135,11 +135,11 @@ export class ChainGateway {
       const pageObject = asRecord(page);
       const results = Array.isArray(page)
         ? page
-        : Array.isArray(pageObject?.results)
-          ? pageObject.results
+        : Array.isArray(pageObject?.['results'])
+          ? pageObject['results']
           : [];
       values.push(...(results as T[]));
-      const next = pageObject?.nextPageBookmark;
+      const next = pageObject?.['nextPageBookmark'];
       bookmark = typeof next === 'string' && next !== '' ? next : undefined;
     } while (bookmark !== undefined);
     return values;

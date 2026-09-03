@@ -170,7 +170,7 @@ export class Positions {
       tickLower: `${args.tickLower}`,
       tickUpper: `${args.tickUpper}`,
       amount: new BigNumber(args.amount).toFixed(),
-      amountIsToken0: `${args.amountIsToken0}`,
+      amountIsToken0: String(args.amountIsToken0),
     });
     return response.data;
   }
@@ -427,10 +427,9 @@ export class Positions {
     ]);
     const flipped = tokenA.symbol > tokenB.symbol;
     const [token0, token1] = flipped ? [tokenB, tokenA] : [tokenA, tokenB];
-    const sourcePriceInput = args.startingPrice ?? args.startingSqrtPrice;
-    if (sourcePriceInput === undefined) {
-      throw new GSwapSDKError('A starting price is required.', 'VALIDATION_ERROR');
-    }
+    const sourcePriceInput = hasPrice
+      ? (args.startingPrice as NumericAmount)
+      : (args.startingSqrtPrice as NumericAmount);
     const sourcePrice = new BigNumber(sourcePriceInput);
     if (!sourcePrice.isFinite() || sourcePrice.isLessThanOrEqualTo(0)) {
       throw new GSwapSDKError('Starting price must be finite and positive.', 'VALIDATION_ERROR');
@@ -452,7 +451,7 @@ export class Positions {
     return this.submit('CreatePool', dto as unknown as Record<string, unknown>);
   }
 
-  private async submit<TDto extends Record<string, unknown>>(method: string, dto: TDto) {
+  private async submit(method: string, dto: Record<string, unknown>) {
     if (this.signer === undefined) throw GSwapSDKError.noSignerError();
     const signed = await this.signer.signObject(method, dto);
     const submitOptions =
@@ -486,7 +485,7 @@ export class Positions {
 
   private isNotFound(error: unknown): boolean {
     if (!(error instanceof GSwapSDKError) || error.details === undefined) return false;
-    return error.details.status === 404;
+    return error.details['status'] === 404;
   }
 
   private mapPosition(position: PositionWire): Position {

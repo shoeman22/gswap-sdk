@@ -1,6 +1,6 @@
 import BigNumber from 'bignumber.js';
 import { GSwapSDKError } from '../classes/gswap_sdk_error.js';
-import { NumericAmount } from '../types/amounts.js';
+import type { NumericAmount } from '../types/amounts.js';
 
 export function validateNumericAmount(
   amount: NumericAmount,

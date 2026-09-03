@@ -1,6 +1,6 @@
-import BigNumber from 'bignumber.js';
-import { Price, SqrtPrice } from './amounts.js';
-import { GalaChainTokenClassKey } from './token.js';
+import type BigNumber from 'bignumber.js';
+import type { Price, SqrtPrice } from './amounts.js';
+import type { GalaChainTokenClassKey } from './token.js';
 
 /**
  * Result from getting a price quote for a token swap.

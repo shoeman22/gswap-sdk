@@ -1,5 +1,6 @@
 import BigNumber from 'bignumber.js';
-import { FEE_TIER, TICK_SPACING_BY_FEE } from '../types/fees.js';
+import type { FEE_TIER } from '../types/fees.js';
+import { TICK_SPACING_BY_FEE } from '../types/fees.js';
 
 /** Minimum tick supported by GalaChainDex. */
 export const GC_MIN_TICK = -887272;
@@ -13,7 +14,7 @@ const DexMath = BigNumber.clone({
 
 /** Convert a tick to the corresponding square-root price. */
 export function tickToSqrtPrice(tick: number): BigNumber {
-  return new DexMath('1.0001').pow(tick / 2);
+  return new DexMath('1.0001').sqrt().pow(tick);
 }
 
 /** Return the greatest tick whose square-root price is no greater than the input. */

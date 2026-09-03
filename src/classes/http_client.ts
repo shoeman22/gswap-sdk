@@ -1,4 +1,4 @@
-import { HttpRequestor } from '../types/http_requestor.js';
+import type { HttpRequestor } from '../types/http_requestor.js';
 import { debugLog } from '../utils/debug.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 

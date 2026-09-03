@@ -132,12 +132,12 @@ export class PrivateKeySigner implements GalaChainSigner {
    * });
    * ```
    */
-  public async signObject<T extends Record<string, unknown>>(
+  public signObject<T extends Record<string, unknown>>(
     _methodName: string,
     dto: T,
   ): Promise<SignedDto<T>> {
     const signature = signatures.getSignature(dto, this.keyBuffer);
-    return { ...dto, signature };
+    return Promise.resolve({ ...dto, signature });
   }
 }
 
