@@ -4,11 +4,12 @@ import { HttpClient } from './http_client.js';
 import { Pools } from './pools.js';
 import { Positions } from './positions.js';
 import { Quoting } from './quoting.js';
-import { GalaChainSigner } from './signers.js';
+import type { GalaChainSigner } from './signers.js';
 import { Symbols } from './symbols.js';
 import { Swaps } from './swaps.js';
 import type { HttpRequestor } from '../types/http_requestor.js';
-import { GSWAP_ENVIRONMENTS, GSwapEnv } from '../types/env.js';
+import type { GSwapEnv } from '../types/env.js';
+import { GSWAP_ENVIRONMENTS } from '../types/env.js';
 
 /** Main entry point for the current GalaChainDex SDK. */
 export class GSwap {

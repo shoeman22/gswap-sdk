@@ -1,6 +1,6 @@
 import { ALL_FEE_TIERS } from '../types/fees.js';
 import type { CompositePool, PoolInfo, Slot0 } from '../types/v2_results.js';
-import { orderSymbols, type TokenRef } from '../utils/ordering.js';
+import { orderSymbols, readOrderedSymbols, type TokenRef } from '../utils/ordering.js';
 import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 import { HttpClient } from './http_client.js';
@@ -103,7 +103,7 @@ export class Pools {
     validateFee(fee);
     const first = await resolveSymbol(this.symbols, token0);
     const second = await resolveSymbol(this.symbols, token1);
-    const ordered = readOrdering(orderSymbols(first, second));
+    const ordered = readOrderedSymbols(orderSymbols(first, second));
     return this.gateway.chainRead<CompositePool>('FetchCompositePoolData', {
       token0: ordered.token0,
       token1: ordered.token1,
@@ -140,23 +140,9 @@ export class Pools {
 }
 
 function validateFee(fee: number): void {
-  if (!ALL_FEE_TIERS.some((tier) => tier === fee)) {
+  if (!ALL_FEE_TIERS.some((tier) => Number(tier) === fee)) {
     throw new GSwapSDKError(`Invalid fee tier: ${fee}`, 'VALIDATION_ERROR', { fee });
   }
-}
-
-function readOrdering(value: unknown): { token0: string; token1: string } {
-  if (Array.isArray(value) && value.length >= 2) {
-    const token0 = value[0];
-    const token1 = value[1];
-    if (typeof token0 === 'string' && typeof token1 === 'string') return { token0, token1 };
-  }
-  if (typeof value === 'object' && value !== null) {
-    const token0 = Reflect.get(value, 'token0');
-    const token1 = Reflect.get(value, 'token1');
-    if (typeof token0 === 'string' && typeof token1 === 'string') return { token0, token1 };
-  }
-  throw new GSwapSDKError('Unable to order trading symbols.', 'VALIDATION_ERROR');
 }
 
 async function resolveSymbol(symbols: PoolSymbols, token: TokenRef): Promise<string> {

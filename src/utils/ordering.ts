@@ -8,6 +8,29 @@ export function orderSymbols(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+/** Read an ordered symbol pair from a tuple or object returned by a boundary helper.
+ *
+ * @example
+ * ```ts
+ * const pair = readOrderedSymbols(['GALA', 'GUSDC']);
+ * console.log(pair.token0);
+ * ```
+ */
+export function readOrderedSymbols(value: unknown): { token0: string; token1: string } {
+  if (Array.isArray(value) && value.length >= 2) {
+    const token0 = (value as unknown[])[0];
+    const token1 = (value as unknown[])[1];
+    if (typeof token0 === 'string' && typeof token1 === 'string') return { token0, token1 };
+  }
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    const token0 = record['token0'];
+    const token1 = record['token1'];
+    if (typeof token0 === 'string' && typeof token1 === 'string') return { token0, token1 };
+  }
+  throw new Error('Unable to order trading symbols.');
+}
+
 /** Return the `$`-joined composite key used by GalaChain object identities. */
 export function compositeKeyOf(token: GalaChainTokenClassKey): string {
   return [token.collection, token.category, token.type, token.additionalKey].join('$');
@@ -30,10 +53,18 @@ export function parseTokenClassKey(tokenClassKey: TokenRef): GalaChainTokenClass
   }
 
   const [collection, category, type, additionalKey] = parts;
+  if (
+    collection === undefined ||
+    category === undefined ||
+    type === undefined ||
+    additionalKey === undefined
+  ) {
+    throw new Error('Invalid token class key: expected four non-empty parts');
+  }
   return {
-    collection: collection!,
-    category: category!,
-    type: type!,
-    additionalKey: additionalKey!,
+    collection,
+    category,
+    type,
+    additionalKey,
   };
 }

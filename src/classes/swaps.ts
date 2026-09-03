@@ -1,7 +1,7 @@
 import BigNumber from 'bignumber.js';
 import type { NumericAmount } from '../types/amounts.js';
 import { ALL_FEE_TIERS } from '../types/fees.js';
-import { orderSymbols, type TokenRef } from '../utils/ordering.js';
+import { orderSymbols, readOrderedSymbols, type TokenRef } from '../utils/ordering.js';
 import { validateNumericAmount } from '../utils/validation.js';
 import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
@@ -67,7 +67,7 @@ export class Swaps {
   ): Promise<Record<string, unknown>> {
     const tokenInSymbol = await resolveSymbol(this.symbols, tokenIn);
     const tokenOutSymbol = await resolveSymbol(this.symbols, tokenOut);
-    const ordered = readOrdering(orderSymbols(tokenInSymbol, tokenOutSymbol));
+    const ordered = readOrderedSymbols(orderSymbols(tokenInSymbol, tokenOutSymbol));
     const tokenInIsToken0 = tokenInSymbol === ordered.token0;
 
     const dto: Record<string, unknown> = {
@@ -82,14 +82,14 @@ export class Swaps {
       dto[tokenInIsToken0 ? 'sell0Qty' : 'sell1Qty'] = toDecimalString(amount.exactIn);
       if (amount.amountOutMinimum !== undefined) {
         validateNumericAmount(amount.amountOutMinimum, 'amountOutMinimum', true);
-        dto.amountOutMinimum = toDecimalString(amount.amountOutMinimum);
+        dto['amountOutMinimum'] = toDecimalString(amount.amountOutMinimum);
       }
     } else {
       validateNumericAmount(amount.exactOut, 'exactOut');
       dto[tokenInIsToken0 ? 'buy1Qty' : 'buy0Qty'] = toDecimalString(amount.exactOut);
       if (amount.amountInMaximum !== undefined) {
         validateNumericAmount(amount.amountInMaximum, 'amountInMaximum', true);
-        dto.amountInMaximum = toDecimalString(amount.amountInMaximum);
+        dto['amountInMaximum'] = toDecimalString(amount.amountInMaximum);
       }
     }
     return dto;
@@ -97,7 +97,7 @@ export class Swaps {
 }
 
 function validateFee(fee: number): void {
-  if (!ALL_FEE_TIERS.some((tier) => tier === fee)) {
+  if (!ALL_FEE_TIERS.some((tier) => Number(tier) === fee)) {
     throw new GSwapSDKError(`Invalid fee tier: ${fee}`, 'VALIDATION_ERROR', { fee });
   }
 }
@@ -112,18 +112,4 @@ async function resolveSymbol(symbols: SwapSymbols, token: TokenRef): Promise<str
   throw new GSwapSDKError('Token could not be resolved to a trading symbol.', 'SYMBOL_NOT_FOUND', {
     token,
   });
-}
-
-function readOrdering(value: unknown): { token0: string; token1: string } {
-  if (Array.isArray(value) && value.length >= 2) {
-    const token0 = value[0];
-    const token1 = value[1];
-    if (typeof token0 === 'string' && typeof token1 === 'string') return { token0, token1 };
-  }
-  if (typeof value === 'object' && value !== null) {
-    const token0 = Reflect.get(value, 'token0');
-    const token1 = Reflect.get(value, 'token1');
-    if (typeof token0 === 'string' && typeof token1 === 'string') return { token0, token1 };
-  }
-  throw new GSwapSDKError('Unable to order trading symbols.', 'VALIDATION_ERROR');
 }

@@ -1,5 +1,5 @@
-import BigNumber from 'bignumber.js';
-import { Brand } from './branding.js';
+import type BigNumber from 'bignumber.js';
+import type { Brand } from './branding.js';
 
 export type NumericAmount = string | number | BigNumber;
 

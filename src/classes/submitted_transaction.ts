@@ -46,7 +46,7 @@ export class SubmittedTransaction {
       const body = await readBody(response);
       if (response.ok) {
         const envelope = asRecord(body);
-        const data = envelope?.data ?? body;
+        const data = envelope?.['data'] ?? body;
         return data as IndexedTransaction;
       }
 

@@ -5,7 +5,7 @@ import type { QuoteResult } from '../types/v2_results.js';
 import type { TokenRef } from '../utils/ordering.js';
 import { validateNumericAmount } from '../utils/validation.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
-import { HttpClient } from './http_client.js';
+import type { HttpClient } from './http_client.js';
 import type { Symbols } from './symbols.js';
 
 interface QuoteWire {
@@ -102,7 +102,7 @@ export class Quoting {
       tokenOut: tokenOutSymbol,
       ...amount,
     };
-    if (fee !== undefined) params.fee = String(fee);
+    if (fee !== undefined) params['fee'] = String(fee);
 
     try {
       const response = await this.http.sendGetRequest<BackendEnvelope<QuoteWire>>(
@@ -170,21 +170,21 @@ function mapQuoteError(
 }
 
 function readStatus(details: Record<string, unknown> | undefined): number | undefined {
-  const status = details?.status;
+  const status = details?.['status'];
   return typeof status === 'number' ? status : undefined;
 }
 
 function readMessage(details: Record<string, unknown> | undefined): string | undefined {
-  const direct = details?.message;
+  const direct = details?.['message'];
   if (typeof direct === 'string') return direct;
-  const body = details?.body;
+  const body = details?.['body'];
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return undefined;
-  const message = Reflect.get(body, 'message');
+  const message = (body as Record<string, unknown>)['message'];
   return typeof message === 'string' ? message : undefined;
 }
 
 function validateOptionalFee(fee: number | undefined): void {
-  if (fee !== undefined && !ALL_FEE_TIERS.some((tier) => tier === fee)) {
+  if (fee !== undefined && !ALL_FEE_TIERS.some((tier) => Number(tier) === fee)) {
     throw new GSwapSDKError(`Invalid fee tier: ${fee}`, 'VALIDATION_ERROR', { fee });
   }
 }

@@ -1,8 +1,9 @@
 import type { GalaChainTokenClassKey } from '../types/token.js';
 import type { TradingSymbol } from '../types/v2_results.js';
-import { compositeKeyOf, orderSymbols, parseTokenClassKey, TokenRef } from '../utils/ordering.js';
+import type { TokenRef } from '../utils/ordering.js';
+import { compositeKeyOf, orderSymbols, parseTokenClassKey } from '../utils/ordering.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
-import { ChainGateway } from './gateway.js';
+import type { ChainGateway } from './gateway.js';
 
 const SYMBOL_CACHE_TTL_MS = 60_000;
 
@@ -13,7 +14,7 @@ export class Symbols {
   private refreshInFlight: Promise<TradingSymbol[]> | undefined;
 
   /** Create a symbol service backed by the chain gateway. */
-  constructor(private readonly gateway: ChainGateway) {}
+  constructor(private readonly gateway: Pick<ChainGateway, 'pageAll'>) {}
 
   /** List all registered GalaChainDex trading symbols, cached for 60 seconds. */
   public async list(): Promise<TradingSymbol[]> {

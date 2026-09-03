@@ -1,5 +1,5 @@
-import { GalaChainTokenClassKey } from '../types/token.js';
-import { HTTPResponse } from '../types/http_requestor.js';
+import type { GalaChainTokenClassKey } from '../types/token.js';
+import type { HTTPResponse } from '../types/http_requestor.js';
 
 /** Error raised by the SDK for validation, gateway, chain, or transaction failures. */
 export class GSwapSDKError extends Error {
@@ -61,7 +61,7 @@ export class GSwapSDKError extends Error {
     retryAfterMs?: number,
   ): GSwapSDKError {
     const details: Record<string, unknown> = { status, chainMessage: message };
-    if (retryAfterMs !== undefined) details.retryAfterMs = retryAfterMs;
+    if (retryAfterMs !== undefined) details['retryAfterMs'] = retryAfterMs;
     const sdkMessage =
       code === 'CHAIN_DISPATCH_FAILED' ? message : `Gateway rejected ${code}: ${message}`;
     return new GSwapSDKError(sdkMessage, code, details, message, retryAfterMs);

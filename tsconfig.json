@@ -29,7 +29,9 @@
     "noImplicitOverride": true,
     "noImplicitThis": true,
     "noUncheckedIndexedAccess": true,
-    "noUnusedLocals": false,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
     "noUnusedParameters": true,
     "strictFunctionTypes": true,
     "strictPropertyInitialization": true,
@@ -45,5 +47,6 @@
   "ts-node": {
     "esm": true
   },
+  "include": ["src/**/*"],
   "exclude": ["./examples", "./dist", "tsup.config.ts", "./docs"]
 }

@@ -1,6 +1,6 @@
-import { GetUserAssetsResult } from '../types/sdk_results.js';
+import type { GetUserAssetsResult } from '../types/sdk_results.js';
 import { validateWalletAddress } from '../utils/validation.js';
-import { HttpClient } from './http_client.js';
+import type { HttpClient } from './http_client.js';
 
 /**
  * Service for handling user asset operations.
@@ -64,11 +64,10 @@ export class Assets {
     });
 
     return {
-      tokens:
-        json.data.token.map((token) => ({
-          ...token,
-          decimals: parseInt(token.decimals, 10),
-        })) || [],
+      tokens: json.data.token.map((token) => ({
+        ...token,
+        decimals: parseInt(token.decimals, 10),
+      })),
       count: json.data.count || 0,
     };
   }
