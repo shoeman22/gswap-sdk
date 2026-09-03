@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, rmdir } from 'node:fs/promises';
 import BigNumber from 'bignumber.js';
 import { expect } from 'chai';
@@ -18,10 +19,6 @@ interface LedgerRow {
   block: string;
 }
 
-interface RecordLike {
-  [key: string]: unknown;
-}
-
 describe('stage live v2 flow', function () {
   this.timeout(300_000);
 
@@ -34,9 +31,10 @@ describe('stage live v2 flow', function () {
       throw new Error('GSWAP_LIVE_PRIVATE_KEY must be set for the live test.');
     }
 
+    const signer = new PrivateKeySigner(privateKey);
     const sdk = new GSwap({
       env: 'stage',
-      signer: new PrivateKeySigner(privateKey),
+      signer,
       walletAddress: WALLET_ADDRESS,
     });
     const quote = await sdk.quoting.quoteExactInput('GALA', 'GUSDC', '1');
@@ -60,7 +58,7 @@ describe('stage live v2 flow', function () {
       expect(confirmation).not.to.equal(null);
       if (confirmation === null) throw new Error('Trade confirmation unexpectedly returned null.');
       expect(confirmation.blockNumber).to.be.greaterThan(0);
-      expect(readString(confirmation, 'uniqueKey')).to.equal(swap.uniqueKey);
+      expect(confirmation.uniqueKey).to.equal(swap.uniqueKey);
       ledger.push(tradeLedgerRow(swap, confirmation));
 
       await waitForBalanceIncrease(sdk, gusdcBefore);
@@ -123,13 +121,28 @@ describe('stage live v2 flow', function () {
           /already exists/iu.test(error.message),
       );
 
-      await paceWrite();
+      // The SDK rejects a negative bound locally, before anything is signed or sent.
       await expectSdkError(
         () =>
           sdk.swaps.swap('GALA', 'GUSDC', selectedFee, {
             exactIn: '1',
             amountOutMinimum: '-1',
           }),
+        (error) => error.code === 'VALIDATION_ERROR',
+      );
+
+      // The gateway's bounds validator bounces the same DTO when it is submitted raw.
+      await paceWrite();
+      const negativeBoundDto = await signer.signObject('Trade', {
+        token0: 'GALA',
+        token1: 'GUSDC',
+        fee: selectedFee,
+        uniqueKey: `gswap-sdk-live-${randomUUID()}`,
+        sell0Qty: '1',
+        amountOutMinimum: '-1',
+      });
+      await expectSdkError(
+        () => sdk.gateway.submit('Trade', negativeBoundDto, { walletAddress: WALLET_ADDRESS }),
         (error) => error.code === 'BOUNDS_VIOLATION',
       );
 
@@ -299,16 +312,6 @@ function tradeLedgerRow(
     transactionId: transaction.transactionId ?? confirmation.transactionId,
     block: String(confirmation.blockNumber),
   };
-}
-
-function readString(value: unknown, property: string): string | undefined {
-  const record = asRecord(value);
-  const propertyValue = record?.[property];
-  return typeof propertyValue === 'string' ? propertyValue : undefined;
-}
-
-function asRecord(value: unknown): RecordLike | undefined {
-  return typeof value === 'object' && value !== null ? (value as RecordLike) : undefined;
 }
 
 function isAlreadyExists(error: unknown): boolean {

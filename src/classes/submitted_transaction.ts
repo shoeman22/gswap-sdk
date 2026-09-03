@@ -46,8 +46,16 @@ export class SubmittedTransaction {
       const body = await readBody(response);
       if (response.ok) {
         const envelope = asRecord(body);
-        const data = envelope?.['data'] ?? body;
-        return withUniqueKey(data, this.uniqueKey);
+        const data = asRecord(envelope?.['data']) ?? envelope;
+        if (data === undefined) {
+          throw new GSwapSDKError(
+            'Transaction confirmation returned a malformed body',
+            'CONFIRMATION_FAILED',
+            { status: response.status, body, url },
+          );
+        }
+        // The explore row does not echo the uniqueKey; carry the DTO's key so callers can correlate.
+        return { ...data, uniqueKey: this.uniqueKey } as IndexedTransaction;
       }
 
       const message = bodyMessage(body);
@@ -92,14 +100,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function withUniqueKey(data: unknown, uniqueKey: string): IndexedTransaction {
-  const record = asRecord(data);
-  if (record === undefined) return data as IndexedTransaction;
-  const enriched = { ...record };
-  Object.defineProperty(enriched, 'uniqueKey', { value: uniqueKey, enumerable: false });
-  return enriched as unknown as IndexedTransaction;
 }
 
 function delay(milliseconds: number): Promise<void> {
