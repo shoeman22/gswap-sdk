@@ -1,29 +1,42 @@
 import { expect } from 'chai';
-import type { ChainGateway, SubmittedTransaction } from '../src/classes/gateway.js';
-import { HttpClient } from '../src/classes/http_client.js';
+import type { ChainGateway } from '../src/classes/gateway.js';
 import { GSwapSDKError } from '../src/classes/gswap_sdk_error.js';
+import { SubmittedTransaction } from '../src/classes/submitted_transaction.js';
 import { Swaps } from '../src/classes/swaps.js';
-import { Symbols } from '../src/classes/symbols.js';
 import type { GalaChainSigner } from '../src/classes/signers.js';
-import type { ResolvedEnv } from '../src/types/env.js';
-import type { TokenRef } from '../src/types/v2_dtos.js';
+import type { Symbols } from '../src/classes/symbols.js';
+import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
+import type { TradingSymbol } from '../src/types/v2_results.js';
+import type { TokenRef } from '../src/utils/ordering.js';
 
 const TOKEN_A = 'AAA|Unit|none|none';
 const TOKEN_B = 'BBB|Unit|none|none';
-const signedResult = {
+const response: HTTPResponse = {
+  ok: true,
+  status: 200,
+  json: async () => ({}),
+  text: async () => '{}',
+};
+const noOpRequestor: HttpRequestor = async () => response;
+const signedResult = new SubmittedTransaction({
+  method: 'Trade',
   transactionId: null,
   uniqueKey: 'gswap-sdk-test',
   result: { ok: true },
-} as unknown as SubmittedTransaction;
+  dexBackendBaseUrl: 'https://unused.example.test',
+  httpRequestor: noOpRequestor,
+});
 
 function service(): {
   swaps: Swaps;
+  gateway: Pick<ChainGateway, 'submit'>;
+  symbols: Pick<Symbols, 'resolve'>;
   submissions: Array<{ method: string; body: Record<string, unknown> }>;
   signed: Record<string, unknown>[];
 } {
   const submissions: Array<{ method: string; body: Record<string, unknown> }> = [];
   const signed: Record<string, unknown>[] = [];
-  const gateway = {
+  const gateway: Pick<ChainGateway, 'submit'> = {
     submit: async (
       method: string,
       body: Record<string, unknown>,
@@ -31,7 +44,7 @@ function service(): {
       submissions.push({ method, body });
       return signedResult;
     },
-  } as unknown as ChainGateway;
+  };
   const signer: GalaChainSigner = {
     signObject: async <T extends Record<string, unknown>>(
       _method: string,
@@ -41,18 +54,26 @@ function service(): {
       return { ...dto, signature: 'native-signature' };
     },
   };
-  const symbols = {
-    resolve: async (token: TokenRef): Promise<string> =>
-      typeof token === 'string' && token.includes('|') ? (token.split('|')[0] ?? token) : token,
-  } as unknown as Symbols;
-  const swaps = new Swaps(
-    gateway,
-    symbols,
-    new HttpClient(),
-    { dexBackendBaseUrl: 'https://unused.example.test' } as ResolvedEnv,
-    { signer },
-  );
-  return { swaps, submissions, signed };
+  const symbols: Pick<Symbols, 'resolve'> = {
+    resolve: async (token: TokenRef): Promise<TradingSymbol> => {
+      const symbol =
+        typeof token === 'string'
+          ? token.includes('|')
+            ? (token.split('|')[0] ?? token)
+            : token
+          : token.collection;
+      return {
+        symbol,
+        collection: symbol,
+        category: 'Unit',
+        type: 'none',
+        additionalKey: 'none',
+        decimals: 18,
+      };
+    },
+  };
+  const swaps = new Swaps(gateway, symbols, signer, 'client|012345678901234567890123');
+  return { swaps, gateway, symbols, submissions, signed };
 }
 
 describe('Swaps', () => {
@@ -83,15 +104,13 @@ describe('Swaps', () => {
   });
 
   it('rejects unsupported fee tiers and missing signers', async () => {
-    const { swaps } = service();
+    const { swaps, gateway, symbols } = service();
     const badFee = await swaps
       .swap(TOKEN_A, TOKEN_B, 1, { exactIn: '1' })
       .catch((error: unknown) => error);
     expect(badFee).to.be.instanceOf(GSwapSDKError);
     expect((badFee as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
-    const unsigned = new Swaps({} as ChainGateway, {} as Symbols, new HttpClient(), {
-      dexBackendBaseUrl: 'https://unused.example.test',
-    } as ResolvedEnv);
+    const unsigned = new Swaps(gateway, symbols);
     const noSigner = await unsigned
       .swap(TOKEN_A, TOKEN_B, 500, { exactIn: '1' })
       .catch((error: unknown) => error);

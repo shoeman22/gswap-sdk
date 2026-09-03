@@ -1,3 +1,5 @@
+import type BigNumber from 'bignumber.js';
+
 /** Pool metadata returned by GalaChainDex. */
 export interface PoolInfo {
   token0: string;
@@ -93,6 +95,10 @@ export interface QuoteResult {
   token0Symbol: string;
   token1Symbol: string;
   tokenInIsToken0: boolean;
+  feeTier: number;
+  currentPrice: BigNumber;
+  newPrice: BigNumber;
+  priceImpact: BigNumber;
 }
 
 /** Indexed trade data returned by explore confirmation. */

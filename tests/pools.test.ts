@@ -1,11 +1,10 @@
 import { expect } from 'chai';
-import type { ChainGateway } from '../src/classes/gateway.js';
-import { HttpClient } from '../src/classes/http_client.js';
+import { ChainGateway } from '../src/classes/gateway.js';
 import { Pools } from '../src/classes/pools.js';
 import type { Symbols } from '../src/classes/symbols.js';
 import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
-import type { ResolvedEnv } from '../src/types/env.js';
-import type { TokenRef } from '../src/types/v2_dtos.js';
+import type { TradingSymbol } from '../src/types/v2_results.js';
+import type { TokenRef } from '../src/utils/ordering.js';
 
 const BASE = 'https://swap.example.test';
 
@@ -14,29 +13,48 @@ function response(body: unknown): HTTPResponse {
   return { ok: true, status: 200, json: async () => body, text: async () => text };
 }
 
-function symbols(): Symbols {
+function symbols(): Pick<Symbols, 'resolve'> {
   return {
-    resolve: async (token: TokenRef): Promise<string> =>
-      typeof token === 'string' && token.includes('|') ? (token.split('|')[0] ?? token) : token,
-  } as unknown as Symbols;
+    resolve: async (token: TokenRef): Promise<TradingSymbol> => {
+      const symbol =
+        typeof token === 'string'
+          ? token.includes('|')
+            ? (token.split('|')[0] ?? token)
+            : token
+          : token.collection;
+      return {
+        symbol,
+        collection: symbol,
+        category: 'Unit',
+        type: 'none',
+        additionalKey: 'none',
+        decimals: 18,
+      };
+    },
+  };
+}
+
+function gateway(requestor: HttpRequestor): ChainGateway {
+  return new ChainGateway({
+    gatewayBaseUrl: 'https://gateway.example.test',
+    dexContractBasePath: '/api/asset/dex-contract',
+    dexBackendBaseUrl: BASE,
+    httpRequestor: requestor,
+  });
 }
 
 describe('Pools', () => {
   it('follows FetchPools bookmarks', async () => {
     const requests: Array<{ method: string; body: unknown }> = [];
-    const gateway = {
-      evaluate: async <T>(method: string, body: unknown): Promise<T> => {
-        requests.push({ method, body });
-        return (
-          requests.length === 1
-            ? { results: [{ token0: 'AAA' }], nextPageBookmark: 'next' }
-            : { results: [{ token0: 'BBB' }], nextPageBookmark: '' }
-        ) as T;
-      },
-    } as unknown as ChainGateway;
-    const pools = new Pools(gateway, symbols(), new HttpClient(), {
-      dexBackendBaseUrl: BASE,
-    } as ResolvedEnv);
+    const requestor: HttpRequestor = async (_url, options) => {
+      requests.push({ method: 'FetchPools', body: JSON.parse(String(options?.body)) as unknown });
+      const data =
+        requests.length === 1
+          ? { results: [{ token0: 'AAA' }], nextPageBookmark: 'next' }
+          : { results: [{ token0: 'BBB' }], nextPageBookmark: '' };
+      return response({ Status: 1, Data: data });
+    };
+    const pools = new Pools(gateway(requestor), symbols());
     const result = await pools.getPools();
     expect(result).to.deep.equal([{ token0: 'AAA' }, { token0: 'BBB' }]);
     expect(requests).to.deep.equal([
@@ -53,9 +71,7 @@ describe('Pools', () => {
         data: { token0: 'GALA', token1: 'GUSDC', fee: 3000, flippedFromRequest: true },
       });
     };
-    const pools = new Pools({}, symbols(), new HttpClient(requestor), {
-      dexBackendBaseUrl: BASE,
-    } as ResolvedEnv);
+    const pools = new Pools(gateway(requestor), symbols());
     await pools.getPool('GUSDC|Unit|none|none', 'GALA|Unit|none|none', 3000);
     await pools.getSlot0('GUSDC', 'GALA', 3000);
     expect(calls).to.deep.equal([
@@ -66,15 +82,14 @@ describe('Pools', () => {
 
   it('orders symbols for the composite gateway read', async () => {
     const requests: Array<{ method: string; body: unknown }> = [];
-    const gateway = {
-      evaluate: async <T>(method: string, body: unknown): Promise<T> => {
-        requests.push({ method, body });
-        return { pool: { token0: 'GALA', token1: 'GUSDC' } } as T;
-      },
-    } as unknown as ChainGateway;
-    const pools = new Pools(gateway, symbols(), new HttpClient(), {
-      dexBackendBaseUrl: BASE,
-    } as ResolvedEnv);
+    const requestor: HttpRequestor = async (_url, options) => {
+      requests.push({
+        method: 'FetchCompositePoolData',
+        body: JSON.parse(String(options?.body)) as unknown,
+      });
+      return response({ Status: 1, Data: { pool: { token0: 'GALA', token1: 'GUSDC' } } });
+    };
+    const pools = new Pools(gateway(requestor), symbols());
     await pools.getCompositePool('GUSDC', 'GALA', 3000);
     expect(requests).to.deep.equal([
       { method: 'FetchCompositePoolData', body: { token0: 'GALA', token1: 'GUSDC', fee: 3000 } },

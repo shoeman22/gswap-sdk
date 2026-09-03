@@ -3,7 +3,7 @@ import { GSwapSDKError } from './gswap_sdk_error.js';
 import type { ChainGateway } from './gateway.js';
 import { HttpClient } from './http_client.js';
 import type { GalaChainSigner } from './signers.js';
-import { Symbols } from './symbols.js';
+import type { Symbols } from './symbols.js';
 import type { NumericAmount, PriceIn } from '../types/amounts.js';
 import type { FEE_TIER } from '../types/fees.js';
 import type {
@@ -21,17 +21,8 @@ import { type TokenRef, compositeKeyOf, parseTokenClassKey } from '../utils/orde
 import { validateNumericAmount } from '../utils/validation.js';
 import { alignTickDown, alignTickUp, assertTickRange, tickFromPrice } from '../utils/ticks.js';
 
-interface PositionOptions {
-  signer?: GalaChainSigner;
-  walletAddress?: string;
-}
-
-interface ResolvedEnvironment {
-  gatewayBaseUrl: string;
-  dexContractBasePath: string;
-  tokenContractBasePath: string;
-  dexBackendBaseUrl: string;
-}
+type PositionGateway = Pick<ChainGateway, 'submit' | 'httpRequestor' | 'dexBackendBaseUrl'>;
+type PositionSymbols = Pick<Symbols, 'resolve' | 'orderPair'>;
 
 interface BackendEnvelope<TData> {
   data: TData;
@@ -89,12 +80,15 @@ interface ResolvedCreateToken {
  */
 export class Positions {
   constructor(
-    private readonly gateway: ChainGateway,
-    private readonly symbols: Symbols,
-    private readonly http: HttpClient,
-    private readonly urls: ResolvedEnvironment,
-    private readonly options: PositionOptions = {},
-  ) {}
+    private readonly gateway: PositionGateway,
+    private readonly symbols: PositionSymbols,
+    private readonly signer?: GalaChainSigner,
+    private readonly walletAddress?: string,
+  ) {
+    this.http = new HttpClient(gateway.httpRequestor);
+  }
+
+  private readonly http: HttpClient;
 
   /**
    * Gets all current-contract positions owned by an address.
@@ -459,11 +453,10 @@ export class Positions {
   }
 
   private async submit<TDto extends Record<string, unknown>>(method: string, dto: TDto) {
-    const signer = this.options.signer;
-    if (signer === undefined) throw GSwapSDKError.noSignerError();
-    const signed = await signer.signObject(method, dto);
+    if (this.signer === undefined) throw GSwapSDKError.noSignerError();
+    const signed = await this.signer.signObject(method, dto);
     const submitOptions =
-      this.options.walletAddress === undefined ? {} : { walletAddress: this.options.walletAddress };
+      this.walletAddress === undefined ? {} : { walletAddress: this.walletAddress };
     return this.gateway.submit(method, signed, submitOptions);
   }
 
@@ -472,7 +465,7 @@ export class Positions {
     params: Record<string, string>,
   ): Promise<BackendEnvelope<TData>> {
     return this.http.sendGetRequest<BackendEnvelope<TData>>(
-      this.urls.dexBackendBaseUrl,
+      this.gateway.dexBackendBaseUrl,
       '/v2/trade',
       endpoint,
       params,

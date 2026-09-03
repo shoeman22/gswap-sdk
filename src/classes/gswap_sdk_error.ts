@@ -27,6 +27,32 @@ export class GSwapSDKError extends Error {
     );
   }
 
+  /** Create the error used when no pool can quote the requested pair. */
+  public static noPoolAvailableError(
+    tokenIn: GalaChainTokenClassKey | string,
+    tokenOut: GalaChainTokenClassKey | string,
+    fee?: number,
+  ): GSwapSDKError {
+    return new GSwapSDKError('No pool is available for the requested pair.', 'NO_POOL_AVAILABLE', {
+      tokenIn,
+      tokenOut,
+      ...(fee === undefined ? {} : { fee }),
+    });
+  }
+
+  /** Create the error used when a pool lacks liquidity for a quote. */
+  public static insufficientLiquidityError(
+    tokenIn: GalaChainTokenClassKey | string,
+    tokenOut: GalaChainTokenClassKey | string,
+    fee?: number,
+  ): GSwapSDKError {
+    return new GSwapSDKError(
+      'The selected pool has insufficient liquidity for the requested quote.',
+      'INSUFFICIENT_LIQUIDITY',
+      { tokenIn, tokenOut, ...(fee === undefined ? {} : { fee }) },
+    );
+  }
+
   /** Convert a chain-gateway bounce into a typed SDK error. */
   public static fromGatewayBounce(
     code: string,

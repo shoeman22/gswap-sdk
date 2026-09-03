@@ -1,19 +1,19 @@
 import BigNumber from 'bignumber.js';
 import type { NumericAmount } from '../types/amounts.js';
-import type { ResolvedEnv } from '../types/env.js';
 import { ALL_FEE_TIERS } from '../types/fees.js';
-import type { TokenRef } from '../types/v2_dtos.js';
-import { orderSymbols } from '../utils/ordering.js';
+import { orderSymbols, type TokenRef } from '../utils/ordering.js';
 import { validateNumericAmount } from '../utils/validation.js';
-import type { ChainGateway, SubmittedTransaction } from './gateway.js';
+import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
-import { HttpClient } from './http_client.js';
 import type { GalaChainSigner } from './signers.js';
+import type { SubmittedTransaction } from './submitted_transaction.js';
 import type { Symbols } from './symbols.js';
 
 type SwapAmount =
   | { exactIn: NumericAmount; amountOutMinimum?: NumericAmount }
   | { exactOut: NumericAmount; amountInMaximum?: NumericAmount };
+type SwapGateway = Pick<ChainGateway, 'submit'>;
+type SwapSymbols = Pick<Symbols, 'resolve'>;
 
 /** Executes current-contract Trade operations through the Chain Gateway. */
 export class Swaps {
@@ -22,15 +22,14 @@ export class Swaps {
    *
    * @example
    * ```ts
-   * const swaps = new Swaps(gateway, symbols, http, urls, { signer });
+   * const swaps = new Swaps(gateway, symbols, signer, 'client|alice');
    * ```
    */
   constructor(
-    private readonly gateway: ChainGateway,
-    private readonly symbols: Symbols,
-    private readonly http: HttpClient,
-    private readonly urls: ResolvedEnv,
-    private readonly options: { signer?: GalaChainSigner; walletAddress?: string } = {},
+    private readonly gateway: SwapGateway,
+    private readonly symbols: SwapSymbols,
+    private readonly signer?: GalaChainSigner,
+    private readonly walletAddress?: string,
   ) {}
 
   /**
@@ -49,18 +48,15 @@ export class Swaps {
     tokenOut: TokenRef,
     fee: number,
     amount: SwapAmount,
-    walletAddress?: string,
   ): Promise<SubmittedTransaction> {
-    void this.http;
-    void this.urls;
-    void walletAddress;
     validateFee(fee);
 
     const dto = await this.buildTradeDto(tokenIn, tokenOut, fee, amount);
-    const signer = this.options.signer;
-    if (signer === undefined) throw GSwapSDKError.noSignerError();
-    const signedDto = await signer.signObject('Trade', dto);
-    return this.gateway.submit('Trade', signedDto);
+    if (this.signer === undefined) throw GSwapSDKError.noSignerError();
+    const signedDto = await this.signer.signObject('Trade', dto);
+    const submitOptions =
+      this.walletAddress === undefined ? {} : { walletAddress: this.walletAddress };
+    return this.gateway.submit('Trade', signedDto, submitOptions);
   }
 
   private async buildTradeDto(
@@ -110,13 +106,9 @@ function toDecimalString(amount: NumericAmount): string {
   return new BigNumber(amount).toFixed();
 }
 
-async function resolveSymbol(symbols: Symbols, token: TokenRef): Promise<string> {
-  const resolved: unknown = await symbols.resolve(token);
-  if (typeof resolved === 'string') return resolved;
-  if (typeof resolved === 'object' && resolved !== null && 'symbol' in resolved) {
-    const symbol = Reflect.get(resolved, 'symbol');
-    if (typeof symbol === 'string' && symbol.length > 0) return symbol;
-  }
+async function resolveSymbol(symbols: SwapSymbols, token: TokenRef): Promise<string> {
+  const resolved = await symbols.resolve(token);
+  if (resolved.symbol.length > 0) return resolved.symbol;
   throw new GSwapSDKError('Token could not be resolved to a trading symbol.', 'SYMBOL_NOT_FOUND', {
     token,
   });

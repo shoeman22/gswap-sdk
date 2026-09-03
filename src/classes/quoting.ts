@@ -1,11 +1,9 @@
 import BigNumber from 'bignumber.js';
 import type { NumericAmount } from '../types/amounts.js';
-import type { ResolvedEnv } from '../types/env.js';
 import { ALL_FEE_TIERS } from '../types/fees.js';
-import type { TokenRef } from '../types/v2_dtos.js';
 import type { QuoteResult } from '../types/v2_results.js';
+import type { TokenRef } from '../utils/ordering.js';
 import { validateNumericAmount } from '../utils/validation.js';
-import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 import { HttpClient } from './http_client.js';
 import type { Symbols } from './symbols.js';
@@ -33,6 +31,8 @@ interface BackendEnvelope<T> {
   data: T;
 }
 
+type QuoteSymbols = Pick<Symbols, 'resolve'>;
+
 /** Read-only quote service backed by the v2 offline quote engine. */
 export class Quoting {
   /**
@@ -40,14 +40,13 @@ export class Quoting {
    *
    * @example
    * ```ts
-   * const quoting = new Quoting(gateway, symbols, http, urls);
+   * const quoting = new Quoting('https://swap-backend.stage.defi.ovh.gala.com', http, symbols);
    * ```
    */
   constructor(
-    private readonly gateway: ChainGateway,
-    private readonly symbols: Symbols,
+    private readonly dexBackendBaseUrl: string,
     private readonly http: HttpClient,
-    private readonly urls: ResolvedEnv,
+    private readonly symbols: QuoteSymbols,
   ) {}
 
   /**
@@ -94,7 +93,6 @@ export class Quoting {
     amount: { amountIn: string } | { amountOut: string },
     fee?: number,
   ): Promise<QuoteResult> {
-    void this.gateway;
     validateOptionalFee(fee);
 
     const tokenInSymbol = await resolveSymbol(this.symbols, tokenIn);
@@ -108,7 +106,7 @@ export class Quoting {
 
     try {
       const response = await this.http.sendGetRequest<BackendEnvelope<QuoteWire>>(
-        this.urls.dexBackendBaseUrl,
+        this.dexBackendBaseUrl,
         '/v2/trade',
         '/quote',
         params,
@@ -195,13 +193,9 @@ function toDecimalString(amount: NumericAmount): string {
   return new BigNumber(amount).toFixed();
 }
 
-async function resolveSymbol(symbols: Symbols, token: TokenRef): Promise<string> {
-  const resolved: unknown = await symbols.resolve(token);
-  if (typeof resolved === 'string') return resolved;
-  if (typeof resolved === 'object' && resolved !== null && 'symbol' in resolved) {
-    const symbol = Reflect.get(resolved, 'symbol');
-    if (typeof symbol === 'string' && symbol.length > 0) return symbol;
-  }
+async function resolveSymbol(symbols: QuoteSymbols, token: TokenRef): Promise<string> {
+  const resolved = await symbols.resolve(token);
+  if (resolved.symbol.length > 0) return resolved.symbol;
   throw new GSwapSDKError('Token could not be resolved to a trading symbol.', 'SYMBOL_NOT_FOUND', {
     token,
   });

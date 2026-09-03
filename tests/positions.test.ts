@@ -1,12 +1,13 @@
 import { expect } from 'chai';
 import { GSwapSDKError } from '../src/classes/gswap_sdk_error.js';
-import { HttpClient } from '../src/classes/http_client.js';
 import type { ChainGateway } from '../src/classes/gateway.js';
 import { Positions } from '../src/classes/positions.js';
+import { SubmittedTransaction } from '../src/classes/submitted_transaction.js';
 import type { GalaChainSigner } from '../src/classes/signers.js';
 import type { Symbols } from '../src/classes/symbols.js';
 import type { PriceIn } from '../src/types/amounts.js';
 import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
+import type { TradingSymbol } from '../src/types/v2_results.js';
 import { type TokenRef, compositeKeyOf, parseTokenClassKey } from '../src/utils/ordering.js';
 
 interface RequestRecord {
@@ -14,25 +15,13 @@ interface RequestRecord {
   options: RequestInit | undefined;
 }
 
-interface ResolvedEnvironment {
-  gatewayBaseUrl: string;
-  dexContractBasePath: string;
-  tokenContractBasePath: string;
-  dexBackendBaseUrl: string;
-}
-
-interface ResolvedToken {
+interface ResolvedToken extends TradingSymbol {
   symbol: string;
   decimals: number;
   classKey: ReturnType<typeof parseTokenClassKey>;
 }
 
-const urls: ResolvedEnvironment = {
-  gatewayBaseUrl: 'https://gateway.test',
-  dexContractBasePath: '/api/asset/dex-contract',
-  tokenContractBasePath: '/api/asset/token-contract',
-  dexBackendBaseUrl: 'https://backend.test',
-};
+const dexBackendBaseUrl = 'https://backend.test';
 
 const galaKey = parseTokenClassKey('GALA|Unit|none|none');
 const gusdcKey = parseTokenClassKey('GUSDC|Unit|none|none');
@@ -57,22 +46,44 @@ function createFixture() {
     requests.push({ url, options });
     return nextResponse;
   };
-  const http = new HttpClient(requestor);
-
   const resolve = async (ref: TokenRef): Promise<ResolvedToken> => {
     const value = typeof ref === 'string' ? ref : compositeKeyOf(ref);
     if (value === 'GALA' || value === compositeKeyOf(galaKey)) {
-      return { symbol: 'GALA', decimals: 18, classKey: galaKey };
+      return {
+        symbol: 'GALA',
+        collection: 'GALA',
+        category: 'Unit',
+        type: 'none',
+        additionalKey: 'none',
+        decimals: 18,
+        classKey: galaKey,
+      };
     }
     if (value === 'GUSDC' || value === compositeKeyOf(gusdcKey)) {
-      return { symbol: 'GUSDC', decimals: 6, classKey: gusdcKey };
+      return {
+        symbol: 'GUSDC',
+        collection: 'GUSDC',
+        category: 'Unit',
+        type: 'none',
+        additionalKey: 'none',
+        decimals: 6,
+        classKey: gusdcKey,
+      };
     }
     if (value === 'GALA|Unit|none|none') {
-      return { symbol: 'ZED', decimals: 18, classKey: galaKey };
+      return {
+        symbol: 'ZED',
+        collection: 'GALA',
+        category: 'Unit',
+        type: 'none',
+        additionalKey: 'none',
+        decimals: 18,
+        classKey: galaKey,
+      };
     }
     throw GSwapSDKError.unknownTokenError(ref);
   };
-  const symbols = {
+  const symbols: Pick<Symbols, 'resolve' | 'orderPair'> = {
     resolve,
     orderPair: async (a: TokenRef, b: TokenRef) => {
       const [tokenA, tokenB] = await Promise.all([resolve(a), resolve(b)]);
@@ -80,7 +91,7 @@ function createFixture() {
         ? { token0: tokenA, token1: tokenB, flipped: false }
         : { token0: tokenB, token1: tokenA, flipped: true };
     },
-  } as unknown as Symbols;
+  };
 
   const signer: GalaChainSigner = {
     signObject: async <TObject extends Record<string, unknown>>(
@@ -88,24 +99,24 @@ function createFixture() {
       object: TObject,
     ): Promise<TObject & { signature: string }> => ({ ...object, signature: 'signed' }),
   };
-  const gateway = {
+  const gateway: Pick<ChainGateway, 'submit' | 'httpRequestor' | 'dexBackendBaseUrl'> = {
+    httpRequestor: requestor,
+    dexBackendBaseUrl,
     submit: async (method: string, body: Record<string, unknown>) => {
       submittedMethod = method;
       submittedBody = body;
-      return {
+      return new SubmittedTransaction({
         method,
         uniqueKey: String(body.uniqueKey),
         transactionId: null,
-        mode: 'sync',
         result: {},
-      };
+        dexBackendBaseUrl,
+        httpRequestor: requestor,
+      });
     },
-  } as unknown as ChainGateway;
+  };
 
-  const positions = new Positions(gateway, symbols, http, urls, {
-    signer,
-    walletAddress: 'client|012345678901234567890123',
-  });
+  const positions = new Positions(gateway, symbols, signer, 'client|012345678901234567890123');
 
   return {
     positions,

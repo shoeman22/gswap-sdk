@@ -1,13 +1,12 @@
 import { expect } from 'chai';
 import BigNumber from 'bignumber.js';
-import type { ChainGateway } from '../src/classes/gateway.js';
 import { HttpClient } from '../src/classes/http_client.js';
 import { GSwapSDKError } from '../src/classes/gswap_sdk_error.js';
 import { Quoting } from '../src/classes/quoting.js';
 import { Symbols } from '../src/classes/symbols.js';
-import type { ResolvedEnv } from '../src/types/env.js';
 import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
-import type { TokenRef } from '../src/types/v2_dtos.js';
+import type { TradingSymbol } from '../src/types/v2_results.js';
+import type { TokenRef } from '../src/utils/ordering.js';
 
 const BASE = 'https://swap.example.test';
 const TOKEN_IN = 'GALA|Unit|none|none';
@@ -29,13 +28,26 @@ function service(body: unknown, status = 200): { quoting: Quoting; calls: string
     calls.push(url);
     return response(body, status);
   };
-  const symbols = {
-    resolve: async (token: TokenRef): Promise<string> =>
-      typeof token === 'string' && token.includes('|') ? (token.split('|')[0] ?? token) : token,
-  } as unknown as Symbols;
-  const urls = { dexBackendBaseUrl: BASE } as ResolvedEnv;
+  const symbols: Pick<Symbols, 'resolve'> = {
+    resolve: async (token: TokenRef): Promise<TradingSymbol> => {
+      const symbol =
+        typeof token === 'string'
+          ? token.includes('|')
+            ? (token.split('|')[0] ?? token)
+            : token
+          : token.collection;
+      return {
+        symbol,
+        collection: symbol,
+        category: 'Unit',
+        type: 'none',
+        additionalKey: 'none',
+        decimals: 18,
+      };
+    },
+  };
   return {
-    quoting: new Quoting({} as ChainGateway, symbols, new HttpClient(requestor), urls),
+    quoting: new Quoting(BASE, new HttpClient(requestor), symbols),
     calls,
   };
 }

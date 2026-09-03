@@ -1,8 +1,6 @@
-import type { ResolvedEnv } from '../types/env.js';
 import { ALL_FEE_TIERS } from '../types/fees.js';
-import type { TokenRef } from '../types/v2_dtos.js';
 import type { CompositePool, PoolInfo, Slot0 } from '../types/v2_results.js';
-import { orderSymbols } from '../utils/ordering.js';
+import { orderSymbols, type TokenRef } from '../utils/ordering.js';
 import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 import { HttpClient } from './http_client.js';
@@ -17,6 +15,9 @@ interface BackendEnvelope<T> {
   data: T;
 }
 
+type PoolGateway = Pick<ChainGateway, 'chainRead' | 'httpRequestor' | 'dexBackendBaseUrl'>;
+type PoolSymbols = Pick<Symbols, 'resolve'>;
+
 /** Read-only pool and current-price access for the current GalaChainDex contract. */
 export class Pools {
   /**
@@ -24,15 +25,17 @@ export class Pools {
    *
    * @example
    * ```ts
-   * const pools = new Pools(gateway, symbols, http, urls);
+   * const pools = new Pools(gateway, symbols);
    * ```
    */
   constructor(
-    private readonly gateway: ChainGateway,
-    private readonly symbols: Symbols,
-    private readonly http: HttpClient,
-    private readonly urls: ResolvedEnv,
-  ) {}
+    private readonly gateway: PoolGateway,
+    private readonly symbols: PoolSymbols,
+  ) {
+    this.http = new HttpClient(gateway.httpRequestor);
+  }
+
+  private readonly http: HttpClient;
 
   /**
    * Fetches every current-contract pool, following chain bookmarks.
@@ -48,7 +51,7 @@ export class Pools {
     let bookmark: string | undefined;
     do {
       const body = bookmark === undefined ? {} : { bookmark };
-      const page = await this.gateway.evaluate<PoolPage>('FetchPools', body);
+      const page = await this.gateway.chainRead<PoolPage>('FetchPools', body);
       pools.push(...(page.results ?? []));
       bookmark = page.nextPageBookmark;
     } while (bookmark !== undefined && bookmark !== '');
@@ -101,7 +104,7 @@ export class Pools {
     const first = await resolveSymbol(this.symbols, token0);
     const second = await resolveSymbol(this.symbols, token1);
     const ordered = readOrdering(orderSymbols(first, second));
-    return this.gateway.evaluate<CompositePool>('FetchCompositePoolData', {
+    return this.gateway.chainRead<CompositePool>('FetchCompositePoolData', {
       token0: ordered.token0,
       token1: ordered.token1,
       fee,
@@ -123,7 +126,7 @@ export class Pools {
   private async getBackend<T>(endpoint: string, params: Record<string, string>): Promise<T> {
     try {
       const response = await this.http.sendGetRequest<BackendEnvelope<T>>(
-        this.urls.dexBackendBaseUrl,
+        this.gateway.dexBackendBaseUrl,
         '/v2/trade',
         endpoint,
         params,
@@ -156,13 +159,9 @@ function readOrdering(value: unknown): { token0: string; token1: string } {
   throw new GSwapSDKError('Unable to order trading symbols.', 'VALIDATION_ERROR');
 }
 
-async function resolveSymbol(symbols: Symbols, token: TokenRef): Promise<string> {
-  const resolved: unknown = await symbols.resolve(token);
-  if (typeof resolved === 'string') return resolved;
-  if (typeof resolved === 'object' && resolved !== null && 'symbol' in resolved) {
-    const symbol = Reflect.get(resolved, 'symbol');
-    if (typeof symbol === 'string' && symbol.length > 0) return symbol;
-  }
+async function resolveSymbol(symbols: PoolSymbols, token: TokenRef): Promise<string> {
+  const resolved = await symbols.resolve(token);
+  if (resolved.symbol.length > 0) return resolved.symbol;
   throw new GSwapSDKError('Token could not be resolved to a trading symbol.', 'SYMBOL_NOT_FOUND', {
     token,
   });
