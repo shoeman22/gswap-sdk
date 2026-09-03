@@ -311,14 +311,6 @@ Wallet addresses should be in the format:
 
 Example: `"eth|0x1234567890123456789012345678901234567890"`
 
-## Event listening
-
-Many actions (such as swapping) do not complete immediately. When it does complete (or errors), you will be notified by websocket. To listen for websocket events, run:
-
-```bash
-npm run sockets
-```
-
 ## Examples Workflow
 
 ### 1. Check Pool Information

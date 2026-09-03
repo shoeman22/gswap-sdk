@@ -1,4 +1,5 @@
 import { createWriteClient, parseFee } from './client.js';
+import type { PriceIn } from '@gala-chain/gswap-sdk';
 
 /** Adds one deposit side to an existing or new v2 tick-range position. */
 export async function addLiquidityByTicks(
@@ -42,8 +43,8 @@ export async function addLiquidityByPrice(
     token0,
     token1,
     fee,
-    minPrice,
-    maxPrice,
+    minPrice: minPrice as PriceIn,
+    maxPrice: maxPrice as PriceIn,
     ...deposit,
   });
   return tx.confirm();
