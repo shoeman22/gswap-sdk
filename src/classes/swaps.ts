@@ -81,14 +81,18 @@ export class Swaps {
       validateNumericAmount(amount.exactIn, 'exactIn');
       dto[tokenInIsToken0 ? 'sell0Qty' : 'sell1Qty'] = toDecimalString(amount.exactIn);
       if (amount.amountOutMinimum !== undefined) {
-        validateNumericAmount(amount.amountOutMinimum, 'amountOutMinimum', true);
+        validateNumericAmount(
+          new BigNumber(amount.amountOutMinimum).abs(),
+          'amountOutMinimum',
+          true,
+        );
         dto['amountOutMinimum'] = toDecimalString(amount.amountOutMinimum);
       }
     } else {
       validateNumericAmount(amount.exactOut, 'exactOut');
       dto[tokenInIsToken0 ? 'buy1Qty' : 'buy0Qty'] = toDecimalString(amount.exactOut);
       if (amount.amountInMaximum !== undefined) {
-        validateNumericAmount(amount.amountInMaximum, 'amountInMaximum', true);
+        validateNumericAmount(new BigNumber(amount.amountInMaximum).abs(), 'amountInMaximum', true);
         dto['amountInMaximum'] = toDecimalString(amount.amountInMaximum);
       }
     }
