@@ -311,7 +311,11 @@ describe('quality boundaries', () => {
       httpRequestor: async () =>
         makeResponse('{"transactionId":"tx-text"}', 200, { jsonFails: true }),
     });
-    expect(await textResponse.confirm()).to.equal('{"transactionId":"tx-text"}');
+    const textError = await textResponse.confirm().catch((error: unknown) => error);
+    expect((textError as GSwapSDKError).code).to.equal('CONFIRMATION_FAILED');
+    expect((textError as GSwapSDKError).message).to.equal(
+      'Transaction confirmation returned a malformed body',
+    );
 
     expect(GSwapSDKError.noSignerError().code).to.equal('NO_SIGNER');
     expect(GSwapSDKError.noPoolAvailableError('A', 'B').code).to.equal('NO_POOL_AVAILABLE');

@@ -201,6 +201,7 @@ describe('v2 foundation', () => {
     });
     expect(await transaction.confirm({ timeoutMs: 100, pollIntervalMs: 0 })).to.deep.equal({
       transactionId: 'tx-1',
+      uniqueKey: 'trade-1',
     });
     expect(calls).to.equal(2);
 
