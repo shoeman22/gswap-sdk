@@ -7,14 +7,10 @@ import './SwapPage.css';
 
 type Token = (typeof tokens)[0];
 
-let timer: NodeJS.Timeout;
-
-const debounce = (func: () => unknown, delay: number) => {
-  clearTimeout(timer);
-  timer = setTimeout(() => {
-    func();
-  }, delay);
-};
+function amountForSwap(mode: 'exactInput' | 'exactOutput' | null, selling: string, buying: string): boolean {
+  const amount = mode === 'exactOutput' ? buying : selling;
+  return amount.trim() !== '' && amount !== '0';
+}
 
 const SwapPage: React.FC = () => {
   const [sellingToken, setSellingToken] = useState<Token>(tokens[0]);
@@ -26,28 +22,44 @@ const SwapPage: React.FC = () => {
   const { gSwap, connectWallet } = useWallet();
 
   useEffect(() => {
+    const amount = ioMode === 'exactInput' ? sellingAmount : buyingAmount;
+    if (amount.trim() === '' || amount === '0') return undefined;
+    let cancelled = false;
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+      void fetchQuote();
+    }, 500);
+
     async function fetchQuote() {
       const gSwap = new GSwap({ env: 'stage' });
-      if (ioMode === 'exactInput') {
-        const quote = await gSwap.quoting.quoteExactInput(
-          sellingToken.collection,
-          buyingToken.collection,
-          sellingAmount,
-        );
-        setBuyingAmount(quote.amountOut.toString());
-        setFee(quote.feeTier);
-      } else {
-        const quote = await gSwap.quoting.quoteExactOutput(
-          sellingToken.collection,
-          buyingToken.collection,
-          buyingAmount,
-        );
-        setSellingAmount(quote.amountIn.toString());
-        setFee(quote.feeTier);
+      try {
+        if (ioMode === 'exactInput') {
+          const quote = await gSwap.quoting.quoteExactInput(
+            sellingToken.collection,
+            buyingToken.collection,
+            sellingAmount,
+          );
+          if (cancelled) return;
+          setBuyingAmount(quote.amountOut);
+          setFee(quote.feeTier);
+        } else {
+          const quote = await gSwap.quoting.quoteExactOutput(
+            sellingToken.collection,
+            buyingToken.collection,
+            buyingAmount,
+          );
+          if (cancelled) return;
+          setSellingAmount(quote.amountIn);
+          setFee(quote.feeTier);
+        }
+      } catch (error: unknown) {
+        if (!cancelled) console.error('Quote failed', error);
       }
     }
 
-    debounce(fetchQuote, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [sellingToken, buyingToken, sellingAmount, buyingAmount, ioMode]);
 
   const handleSwapTokens = () => {
@@ -70,7 +82,9 @@ const SwapPage: React.FC = () => {
 
     try {
       const modeParams =
-        ioMode === 'exactInput' ? { exactIn: sellingAmount } : { exactOut: buyingAmount };
+        ioMode === 'exactInput'
+          ? { exactIn: sellingAmount, amountOutMinimum: buyingAmount }
+          : { exactOut: buyingAmount, amountInMaximum: sellingAmount };
 
       const result = await gSwap.swaps.swap(
         sellingToken.collection,
@@ -158,7 +172,7 @@ const SwapPage: React.FC = () => {
 
           <button
             className="swap-button"
-            disabled={!sellingToken || !buyingToken || !sellingAmount || sellingAmount === '0'}
+            disabled={!sellingToken || !buyingToken || !amountForSwap(ioMode, sellingAmount, buyingAmount)}
             onClick={doSwap}
           >
             Swap

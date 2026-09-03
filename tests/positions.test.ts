@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { GSwapSDKError } from '../src/classes/gswap_sdk_error.js';
-import type { ChainGateway } from '../src/classes/gateway.js';
+import type { ChainGateway, ChainSubmitOptions } from '../src/classes/gateway.js';
 import { Positions } from '../src/classes/positions.js';
 import { SubmittedTransaction } from '../src/classes/submitted_transaction.js';
 import type { GalaChainSigner } from '../src/classes/signers.js';
@@ -102,7 +102,7 @@ function createFixture() {
   const gateway: Pick<ChainGateway, 'submit' | 'httpRequestor' | 'dexBackendBaseUrl'> = {
     httpRequestor: requestor,
     dexBackendBaseUrl,
-    submit: async (method: string, body: Record<string, unknown>) => {
+    submit: async (method: string, body: Record<string, unknown>, options?: ChainSubmitOptions) => {
       submittedMethod = method;
       submittedBody = body;
       return new SubmittedTransaction({
@@ -112,6 +112,9 @@ function createFixture() {
         result: {},
         dexBackendBaseUrl,
         httpRequestor: requestor,
+        ...(options?.positionConfirmation === undefined
+          ? {}
+          : { positionConfirmation: options.positionConfirmation }),
       });
     },
   };
@@ -148,6 +151,8 @@ describe('Positions v2', () => {
       data: [
         {
           pool: 'GALA$GUSDC$3000',
+          token0CompositeKey: 'GALA$Unit$none$none',
+          token1CompositeKey: 'GUSDC$Unit$none$none',
           token0Symbol: 'GALA',
           token1Symbol: 'GUSDC',
           fee: 3000,
@@ -168,6 +173,8 @@ describe('Positions v2', () => {
     expect(result).to.deep.equal([
       {
         pool: 'GALA$GUSDC$3000',
+        token0CompositeKey: 'GALA$Unit$none$none',
+        token1CompositeKey: 'GUSDC$Unit$none$none',
         token0Symbol: 'GALA',
         token1Symbol: 'GUSDC',
         fee: 3000,
@@ -196,6 +203,8 @@ describe('Positions v2', () => {
         pool: 'GALA$GUSDC$3000',
         token0Symbol: 'GALA',
         token1Symbol: 'GUSDC',
+        token0CompositeKey: 'GALA$Unit$none$none',
+        token1CompositeKey: 'GUSDC$Unit$none$none',
         fee: 3000,
         owner: 'client|012345678901234567890123',
         tickLower: -19200,
@@ -350,7 +359,7 @@ describe('Positions v2', () => {
 
   it('omits both withdrawal fields when closing and maps one field when partial', async () => {
     const fixture = createFixture();
-    await fixture.positions.removeLiquidity({
+    const closeTx = await fixture.positions.removeLiquidity({
       token0: 'GALA',
       token1: 'GUSDC',
       fee: 3000,
@@ -360,6 +369,26 @@ describe('Positions v2', () => {
     const closeDto = withoutSignature(fixture.submitted.body ?? {});
     expect(closeDto).not.to.have.property('withdrawalQuantityToken0');
     expect(closeDto).not.to.have.property('withdrawalQuantityToken1');
+
+    fixture.setResponse({
+      status: 200,
+      error: false,
+      data: {
+        token0Symbol: 'GALA',
+        token1Symbol: 'GUSDC',
+        fee: 3000,
+        tickLower: -19200,
+        tickUpper: 12000,
+        liquidity: '1',
+        amount0: '1',
+        amount1: '2',
+        inRange: true,
+        owner: 'client|012345678901234567890123',
+      },
+    });
+    expect(await closeTx.confirm({ timeoutMs: 1_000, pollIntervalMs: 1 })).to.include({
+      token0Symbol: 'GALA',
+    });
 
     await fixture.positions.removeLiquidity({
       token0: 'GUSDC',
@@ -459,7 +488,7 @@ describe('Positions v2', () => {
       .addLiquidityByPrice({
         token0: 'GALA',
         token1: 'GUSDC',
-        fee: 1,
+        fee: 1 as never,
         minPrice: '1' as PriceIn,
         maxPrice: '2' as PriceIn,
         amount: '1',
@@ -531,6 +560,10 @@ describe('Positions v2', () => {
       .createPool({ token0: 'GALA', token1: 'GUSDC', fee: 3000, startingPrice: '0' })
       .catch((error: unknown) => error);
     expect((badPrice as GSwapSDKError).message).to.include('finite and positive');
+    const numericPrice = await fixture.positions
+      .createPool({ token0: 'GALA', token1: 'GUSDC', fee: 3000, startingPrice: 1 as never })
+      .catch((error: unknown) => error);
+    expect((numericPrice as GSwapSDKError).message).to.include('JavaScript number');
     await fixture.positions.createPool({
       token0: 'NEW|Unit|none|none',
       token1: 'GUSDC',
@@ -560,14 +593,24 @@ describe('Positions v2', () => {
           amount1: '3',
           inRange: false,
           owner: 'client|alice',
+          token0CompositeKey: 'GALA$Unit$none$none',
+          token1CompositeKey: 'GUSDC$Unit$none$none',
+          currentTick: -60,
+          sqrtPrice: '0.5',
+          pool: 'GALA$GUSDC$3000',
+          poolRef: 'GALA$GUSDC$3000',
+          fees0: '0.1',
+          fees1: '0.2',
         },
       ],
     });
     expect(await fixture.positions.getUserPositions('client|alice')).to.deep.equal([
       {
-        pool: '',
+        pool: 'GALA$GUSDC$3000',
         token0Symbol: 'GALA',
         token1Symbol: 'GUSDC',
+        token0CompositeKey: 'GALA$Unit$none$none',
+        token1CompositeKey: 'GUSDC$Unit$none$none',
         fee: 3000,
         tickLower: -60,
         tickUpper: 60,
@@ -576,8 +619,34 @@ describe('Positions v2', () => {
         amount1: '3',
         inRange: false,
         owner: 'client|alice',
+        currentTick: -60,
+        sqrtPrice: '0.5',
+        fees0: '0.1',
+        fees1: '0.2',
       },
     ]);
+    fixture.setResponse({
+      status: 200,
+      error: false,
+      data: [
+        {
+          token0Symbol: 'GALA',
+          token1Symbol: 'GUSDC',
+          fee: 3000,
+          tickLower: -60,
+          tickUpper: 60,
+          liquidity: '1',
+          amount0: '2',
+          amount1: '3',
+          inRange: true,
+          owner: 'client|alice',
+          pool: 'pool-fallback',
+        },
+      ],
+    });
+    expect((await fixture.positions.getUserPositions('client|alice'))[0]?.pool).to.equal(
+      'pool-fallback',
+    );
     await fixture.positions.createPool({
       token0: galaKey,
       token1: 'GUSDC',
@@ -615,7 +684,7 @@ describe('Positions v2', () => {
     expect((error as Error).message).to.equal('resolver failed');
   });
 
-  it('covers canonical withdrawal sides, nullable failures, and unsiged writes', async () => {
+  it('covers canonical withdrawal sides, nullable failures, and unsigned writes', async () => {
     const fixture = createFixture();
     await fixture.positions.removeLiquidity({
       token0: 'GUSDC',

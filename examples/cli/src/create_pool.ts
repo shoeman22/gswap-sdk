@@ -15,5 +15,10 @@ export async function createPool(
     fee,
     startingPrice,
   });
-  return tx.confirm();
+  return {
+    transactionId: tx.transactionId,
+    blockNumber: tx.blockNumber,
+    uniqueKey: tx.uniqueKey,
+    result: tx.result,
+  };
 }

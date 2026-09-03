@@ -11,24 +11,34 @@ export interface V2PoolWriteBase {
 
 /** A v2 trade with exactly one selected trade-side quantity. */
 export type TradeDTO = V2PoolWriteBase &
-  ({ sell0Qty: string } | { sell1Qty: string } | { buy0Qty: string } | { buy1Qty: string }) & {
-    amountOutMinimum?: string;
-    amountInMaximum?: string;
+  (
+    | { sell0Qty: string; sell1Qty?: never; buy0Qty?: never; buy1Qty?: never }
+    | { sell0Qty?: never; sell1Qty: string; buy0Qty?: never; buy1Qty?: never }
+    | { sell0Qty?: never; sell1Qty?: never; buy0Qty: string; buy1Qty?: never }
+    | { sell0Qty?: never; sell1Qty?: never; buy0Qty?: never; buy1Qty: string }
+  ) & {
+    amountOutMinimum?: string | undefined;
+    amountInMaximum?: string | undefined;
   };
 
 /** A v2 liquidity deposit with exactly one selected deposit quantity. */
 export type AddLiquidityDTO = V2PoolWriteBase & {
   tickLower: number;
   tickUpper: number;
-} & ({ depositQuantityToken0: string } | { depositQuantityToken1: string });
+} & (
+    | { depositQuantityToken0: string; depositQuantityToken1?: never }
+    | { depositQuantityToken0?: never; depositQuantityToken1: string }
+  );
 
 /** A v2 liquidity withdrawal; omitting both quantities closes the position. */
-export interface RemoveLiquidityDTO extends V2PoolWriteBase {
+export type RemoveLiquidityDTO = V2PoolWriteBase & {
   tickLower: number;
   tickUpper: number;
-  withdrawalQuantityToken0?: string;
-  withdrawalQuantityToken1?: string;
-}
+} & (
+    | { withdrawalQuantityToken0: string; withdrawalQuantityToken1?: never }
+    | { withdrawalQuantityToken0?: never; withdrawalQuantityToken1: string }
+    | { withdrawalQuantityToken0?: never; withdrawalQuantityToken1?: never }
+  );
 
 /** A v2 request to sweep all fees from one position. */
 export interface CollectPositionFeesDTO extends V2PoolWriteBase {
@@ -43,15 +53,18 @@ export type CreatePoolDTO = {
   token0Symbol: string;
   token1Symbol: string;
   fee: FEE_TIER;
-  isPrivate?: boolean;
-  privateAccess?: string[];
+  isPrivate?: boolean | undefined;
+  privateAccess?: string[] | undefined;
   uniqueKey: string;
-} & ({ startingPrice: string } | { startingSqrtPrice: string });
+} & (
+  | { startingPrice: string; startingSqrtPrice?: never }
+  | { startingPrice?: never; startingSqrtPrice: string }
+);
 
 /** Optional page cursor accepted by chain read methods. */
 export interface PageDTO {
-  limit?: number;
-  bookmark?: string;
+  limit?: number | undefined;
+  bookmark?: string | undefined;
 }
 
 /** Fetch all registered trading symbols. */
@@ -72,5 +85,5 @@ export type FetchPoolsDTO = Partial<FetchCompositePoolDataDTO> & PageDTO;
 
 /** Fetch all liquidity positions, optionally narrowed to a pool reference. */
 export interface FetchLiquidityPositionsDTO extends PageDTO {
-  pool?: string;
+  pool?: string | undefined;
 }

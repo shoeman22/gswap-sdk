@@ -1,17 +1,28 @@
 import BigNumber from 'bignumber.js';
 import type { NumericAmount } from '../types/amounts.js';
-import { ALL_FEE_TIERS } from '../types/fees.js';
+import type { FEE_TIER } from '../types/fees.js';
 import { orderSymbols, readOrderedSymbols, type TokenRef } from '../utils/ordering.js';
-import { validateNumericAmount } from '../utils/validation.js';
+import { validateFee, validateNumericAmount } from '../utils/validation.js';
 import type { ChainGateway } from './gateway.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 import type { GalaChainSigner } from './signers.js';
 import type { SubmittedTransaction } from './submitted_transaction.js';
+import type { IndexedTransaction } from '../types/v2_results.js';
 import type { Symbols } from './symbols.js';
 
-type SwapAmount =
-  | { exactIn: NumericAmount; amountOutMinimum?: NumericAmount }
-  | { exactOut: NumericAmount; amountInMaximum?: NumericAmount };
+export type SwapAmount =
+  | {
+      exactIn: NumericAmount;
+      exactOut?: undefined;
+      amountOutMinimum?: NumericAmount | undefined;
+      amountInMaximum?: undefined;
+    }
+  | {
+      exactIn?: undefined;
+      exactOut: NumericAmount;
+      amountOutMinimum?: undefined;
+      amountInMaximum?: NumericAmount | undefined;
+    };
 type SwapGateway = Pick<ChainGateway, 'submit'>;
 type SwapSymbols = Pick<Symbols, 'resolve'>;
 
@@ -46,9 +57,9 @@ export class Swaps {
   public async swap(
     tokenIn: TokenRef,
     tokenOut: TokenRef,
-    fee: number,
+    fee: FEE_TIER,
     amount: SwapAmount,
-  ): Promise<SubmittedTransaction> {
+  ): Promise<SubmittedTransaction<IndexedTransaction>> {
     validateFee(fee);
 
     const dto = await this.buildTradeDto(tokenIn, tokenOut, fee, amount);
@@ -62,7 +73,7 @@ export class Swaps {
   private async buildTradeDto(
     tokenIn: TokenRef,
     tokenOut: TokenRef,
-    fee: number,
+    fee: FEE_TIER,
     amount: SwapAmount,
   ): Promise<Record<string, unknown>> {
     const tokenInSymbol = await resolveSymbol(this.symbols, tokenIn);
@@ -74,31 +85,36 @@ export class Swaps {
       token0: ordered.token0,
       token1: ordered.token1,
       fee,
-      uniqueKey: `gswap-sdk-${crypto.randomUUID()}`,
+      uniqueKey: `gswap-sdk-${globalThis.crypto.randomUUID()}`,
     };
 
     if ('exactIn' in amount) {
-      validateNumericAmount(amount.exactIn, 'exactIn');
-      dto[tokenInIsToken0 ? 'sell0Qty' : 'sell1Qty'] = toDecimalString(amount.exactIn);
+      const exactIn = amount.exactIn;
+      if (exactIn === undefined) {
+        throw new GSwapSDKError('exactIn is required for an exact-input swap.', 'VALIDATION_ERROR');
+      }
+      validateNumericAmount(exactIn, 'exactIn');
+      dto[tokenInIsToken0 ? 'sell0Qty' : 'sell1Qty'] = toDecimalString(exactIn);
       if (amount.amountOutMinimum !== undefined) {
         validateNumericAmount(amount.amountOutMinimum, 'amountOutMinimum', true);
         dto['amountOutMinimum'] = toDecimalString(amount.amountOutMinimum);
       }
     } else {
-      validateNumericAmount(amount.exactOut, 'exactOut');
-      dto[tokenInIsToken0 ? 'buy1Qty' : 'buy0Qty'] = toDecimalString(amount.exactOut);
+      const exactOut = amount.exactOut;
+      if (exactOut === undefined) {
+        throw new GSwapSDKError(
+          'exactOut is required for an exact-output swap.',
+          'VALIDATION_ERROR',
+        );
+      }
+      validateNumericAmount(exactOut, 'exactOut');
+      dto[tokenInIsToken0 ? 'buy1Qty' : 'buy0Qty'] = toDecimalString(exactOut);
       if (amount.amountInMaximum !== undefined) {
         validateNumericAmount(amount.amountInMaximum, 'amountInMaximum', true);
         dto['amountInMaximum'] = toDecimalString(amount.amountInMaximum);
       }
     }
     return dto;
-  }
-}
-
-function validateFee(fee: number): void {
-  if (!ALL_FEE_TIERS.some((tier) => Number(tier) === fee)) {
-    throw new GSwapSDKError(`Invalid fee tier: ${fee}`, 'VALIDATION_ERROR', { fee });
   }
 }
 

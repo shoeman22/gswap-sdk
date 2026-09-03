@@ -1,4 +1,4 @@
-import type { GetUserAssetsResult } from '../types/sdk_results.js';
+import type { UserAssetsResult } from '../types/v2_results.js';
 import { validateWalletAddress } from '../utils/validation.js';
 import type { HttpClient } from './http_client.js';
 
@@ -31,7 +31,7 @@ export class Assets {
     ownerAddress: string,
     page: number = 1,
     limit: number = 10,
-  ): Promise<GetUserAssetsResult> {
+  ): Promise<UserAssetsResult> {
     validateWalletAddress(ownerAddress);
 
     if (!Number.isInteger(page) || page < 1) {

@@ -4,7 +4,7 @@ export type FeeTier = 0 | 500 | 3000 | 10000;
 
 /** Returns the requested SDK environment, defaulting CLI calls to staging. */
 export function getEnvironment(): 'prod' | 'stage' {
-  return process.env.GSWAP_ENV === 'prod' ? 'prod' : 'stage';
+  return process.env['GSWAP_ENV'] === 'prod' ? 'prod' : 'stage';
 }
 
 /** Creates a read-only SDK client for the selected environment. */
@@ -14,8 +14,8 @@ export function createReadClient(): GSwap {
 
 /** Creates a signing SDK client from the CLI key and wallet environment variables. */
 export function createWriteClient(): GSwap {
-  const privateKey = process.env.GALACHAIN_PRIVATE_KEY;
-  const walletAddress = process.env.GALACHAIN_ADDRESS;
+  const privateKey = process.env['GALACHAIN_PRIVATE_KEY'];
+  const walletAddress = process.env['GALACHAIN_ADDRESS'];
   if (!privateKey || !walletAddress) {
     throw new Error('Set GALACHAIN_PRIVATE_KEY and GALACHAIN_ADDRESS before running a write.');
   }

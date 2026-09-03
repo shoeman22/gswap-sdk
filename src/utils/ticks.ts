@@ -1,4 +1,5 @@
 import BigNumber from 'bignumber.js';
+import Decimal from 'decimal.js';
 import type { FEE_TIER } from '../types/fees.js';
 import { TICK_SPACING_BY_FEE } from '../types/fees.js';
 
@@ -11,10 +12,11 @@ const DexMath = BigNumber.clone({
   DECIMAL_PLACES: 60,
   ROUNDING_MODE: BigNumber.ROUND_DOWN,
 });
+const DexDecimal = Decimal.clone({ precision: 60 });
 
 /** Convert a tick to the corresponding square-root price. */
 export function tickToSqrtPrice(tick: number): BigNumber {
-  return new DexMath('1.0001').sqrt().pow(tick);
+  return new BigNumber(new DexDecimal(1.0001).pow(tick / 2).toString());
 }
 
 /** Return the greatest tick whose square-root price is no greater than the input. */
@@ -31,9 +33,18 @@ export function sqrtPriceToTick(sqrtPrice: BigNumber.Value): number {
 
 /** Return the greatest integer tick whose token1/token0 price is no greater than `price`. */
 export function tickFromPrice(price: BigNumber.Value): number {
-  const value = new DexMath(price);
-  if (!value.isFinite() || value.isLessThanOrEqualTo(0)) return Number.NaN;
-  const tick = Math.floor(Math.log(value.toNumber()) / Math.log(1.0001));
+  const priceText =
+    typeof price === 'string'
+      ? price
+      : typeof price === 'number'
+        ? price.toString()
+        : BigNumber.isBigNumber(price)
+          ? price.toString()
+          : 'NaN';
+  const value = new DexDecimal(priceText);
+  if (!value.isFinite() || value.lessThanOrEqualTo(0)) return Number.NaN;
+  if (!Number.isFinite(value.toNumber())) return Number.NaN;
+  const tick = value.ln().dividedBy(new DexDecimal(1.0001).ln()).floor().toNumber();
   return Number.isFinite(tick) ? tick : Number.NaN;
 }
 

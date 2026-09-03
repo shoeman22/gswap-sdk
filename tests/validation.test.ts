@@ -14,13 +14,13 @@ describe('Validation Utilities', () => {
   describe('validateNumericAmount', () => {
     it('should accept valid positive numbers', () => {
       expect(() => validateNumericAmount('100', 'amount')).to.not.throw();
-      expect(() => validateNumericAmount(100, 'amount')).to.not.throw();
+      expect(() => validateNumericAmount('100', 'amount')).to.not.throw();
       expect(() => validateNumericAmount('0.01', 'amount')).to.not.throw();
     });
 
     it('should accept zero when allowZero is true', () => {
       expect(() => validateNumericAmount('0', 'amount', true)).to.not.throw();
-      expect(() => validateNumericAmount(0, 'amount', true)).to.not.throw();
+      expect(() => validateNumericAmount('0', 'amount', true)).to.not.throw();
     });
 
     it('should reject zero when allowZero is false', () => {
@@ -28,7 +28,7 @@ describe('Validation Utilities', () => {
         GSwapSDKError,
         'Invalid amount: must be positive',
       );
-      expect(() => validateNumericAmount(0, 'amount')).to.throw(
+      expect(() => validateNumericAmount('0', 'amount')).to.throw(
         GSwapSDKError,
         'Invalid amount: must be positive',
       );
@@ -39,25 +39,29 @@ describe('Validation Utilities', () => {
         GSwapSDKError,
         'Invalid amount: must be positive',
       );
-      expect(() => validateNumericAmount(-1, 'amount')).to.throw(
+      expect(() => validateNumericAmount('-1', 'amount', true)).to.throw(
+        GSwapSDKError,
+        'Invalid amount: must be non-negative',
+      );
+      expect(() => validateNumericAmount('-1', 'amount')).to.throw(
         GSwapSDKError,
         'Invalid amount: must be positive',
       );
     });
 
     it('should reject infinite numbers', () => {
-      expect(() => validateNumericAmount(Infinity, 'amount')).to.throw(
+      expect(() => validateNumericAmount('Infinity', 'amount')).to.throw(
         GSwapSDKError,
         'Invalid amount: must be a finite number',
       );
-      expect(() => validateNumericAmount(-Infinity, 'amount')).to.throw(
+      expect(() => validateNumericAmount('-Infinity', 'amount')).to.throw(
         GSwapSDKError,
         'Invalid amount: must be a finite number',
       );
     });
 
     it('should reject NaN', () => {
-      expect(() => validateNumericAmount(NaN, 'amount')).to.throw(
+      expect(() => validateNumericAmount('NaN', 'amount')).to.throw(
         GSwapSDKError,
         'Invalid amount: must be a finite number',
       );
@@ -80,7 +84,7 @@ describe('Validation Utilities', () => {
   describe('validatePriceValues', () => {
     it('should accept valid price values', () => {
       expect(() => validatePriceValues('1', '0.5', '2')).to.not.throw();
-      expect(() => validatePriceValues(1, 0.5, 2)).to.not.throw();
+      expect(() => validatePriceValues('1', '0.5', '2')).to.not.throw();
     });
 
     it('should reject when lower price is greater than upper price', () => {
@@ -98,7 +102,7 @@ describe('Validation Utilities', () => {
     });
 
     it('should handle infinite upper price', () => {
-      expect(() => validatePriceValues('1', '0.5', Infinity)).to.not.throw();
+      expect(() => validatePriceValues('1', '0.5', 'Infinity')).to.not.throw();
     });
 
     it('should throw GSwapSDKError with correct code and details for invalid price range', () => {
@@ -143,11 +147,11 @@ describe('Validation Utilities', () => {
     });
 
     it('should reject ticks outside valid range', () => {
-      expect(() => validateTickRange(-886801, 1000)).to.throw(
-        'Invalid tick range: ticks must be between -886800 and 886800',
+      expect(() => validateTickRange(-887273, 1000)).to.throw(
+        'Invalid tick range: ticks must be between -887272 and 887272',
       );
-      expect(() => validateTickRange(-1000, 886801)).to.throw(
-        'Invalid tick range: ticks must be between -886800 and 886800',
+      expect(() => validateTickRange(-1000, 887273)).to.throw(
+        'Invalid tick range: ticks must be between -887272 and 887272',
       );
     });
 
@@ -175,15 +179,15 @@ describe('Validation Utilities', () => {
 
     it('should throw GSwapSDKError with correct code and details for invalid tick bounds', () => {
       try {
-        validateTickRange(-886801, 1000);
+        validateTickRange(-887273, 1000);
         expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error).to.be.instanceOf(GSwapSDKError);
         expect((error as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
         expect((error as GSwapSDKError).details?.['type']).to.equal('INVALID_TICK_BOUNDS');
-        expect((error as GSwapSDKError).details?.['tickLower']).to.equal(-886801);
-        expect((error as GSwapSDKError).details?.['minTick']).to.equal(-886800);
-        expect((error as GSwapSDKError).details?.['maxTick']).to.equal(886800);
+        expect((error as GSwapSDKError).details?.['tickLower']).to.equal(-887273);
+        expect((error as GSwapSDKError).details?.['minTick']).to.equal(-887272);
+        expect((error as GSwapSDKError).details?.['maxTick']).to.equal(887272);
       }
     });
 
@@ -211,14 +215,14 @@ describe('Validation Utilities', () => {
     it('should reject negative fees', () => {
       expect(() => validateFee(-1)).to.throw(
         GSwapSDKError,
-        'Invalid fee: must be a non-negative integer',
+        'Invalid fee tier: must be one of 0, 500, 3000, or 10000',
       );
     });
 
     it('should reject non-integer fees', () => {
       expect(() => validateFee(500.5)).to.throw(
         GSwapSDKError,
-        'Invalid fee: must be a non-negative integer',
+        'Invalid fee tier: must be one of 0, 500, 3000, or 10000',
       );
     });
 

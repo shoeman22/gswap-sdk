@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup';
+import packageJson from './package.json';
 
 export default defineConfig([
   // Node.js build (CommonJS and ESM)
@@ -19,6 +20,9 @@ export default defineConfig([
     platform: 'node',
     external: ['@gala-chain/api', 'bignumber.js'],
     outDir: 'dist',
+    define: {
+      __GSWAP_SDK_VERSION__: JSON.stringify(packageJson.version),
+    },
     outExtension({ format }) {
       return {
         js: format === 'cjs' ? '.cjs' : '.mjs',
@@ -49,6 +53,7 @@ export default defineConfig([
     },
     define: {
       'process.env.NODE_ENV': '"production"',
+      __GSWAP_SDK_VERSION__: JSON.stringify(packageJson.version),
     },
     esbuildOptions(options) {
       // Provide browser polyfills for Node.js built-ins

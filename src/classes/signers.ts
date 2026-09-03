@@ -2,6 +2,9 @@ import { serialize, signatures } from '@gala-chain/api';
 import { calculatePersonalSignPrefix } from '@gala-chain/connect';
 import { GSwapSDKError } from './gswap_sdk_error.js';
 
+// Keep the GalaChain 2.x serializer: the 3.x prefix treatment is incompatible
+// with the personal-sign payload contract used by the v2 gateway.
+
 /** The signing schemes supported by the Gala Wallet signer. */
 export type GalaWalletScheme = 'native' | 'personal-sign';
 
@@ -55,11 +58,36 @@ function getWalletProvider(): GalaWalletProvider {
   return wallet;
 }
 
-function getSignature(value: unknown): string {
+function getNativeSignature(value: unknown): string {
   if (typeof value !== 'string') {
     throw new GSwapSDKError('Wallet returned an invalid signature.', 'INVALID_SIGNATURE');
   }
+  if (!/^[0-9a-fA-F]{130}$/u.test(value)) {
+    throw new GSwapSDKError('Wallet returned an invalid native signature.', 'INVALID_SIGNATURE');
+  }
   return value;
+}
+
+function getPersonalSignature(value: unknown): string {
+  if (typeof value !== 'string' || !/^(?:0x)?[0-9a-fA-F]{130}$/u.test(value)) {
+    throw new GSwapSDKError(
+      'Wallet returned an invalid personal-sign signature.',
+      'INVALID_SIGNATURE',
+    );
+  }
+  return value;
+}
+
+function normalizeEthereumAccount(address: string, allowGalaPrefix: boolean): string {
+  const normalized = allowGalaPrefix && address.startsWith('eth|') ? address.slice(4) : address;
+  if (!/^0x[0-9a-fA-F]{40}$/u.test(normalized)) {
+    throw new GSwapSDKError(
+      'Wallet address must be the selected Ethereum account in 0x-prefixed form.',
+      'VALIDATION_ERROR',
+      { type: 'INVALID_WALLET_ADDRESS', value: address },
+    );
+  }
+  return `0x${normalized.slice(2).toLowerCase()}`;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -95,14 +123,14 @@ function personalSign<T extends Record<string, unknown>>(
 
   return provider
     .request({ method: methodName !== undefined ? 'gala_signChainDto' : 'personal_sign', params })
-    .then((value) => ({ ...payload, signature: getSignature(value) }));
+    .then((value) => ({ ...payload, signature: getPersonalSignature(value) }));
 }
 
 /**
  * A GalaChain native signer backed by a secp256k1 private key.
  *
- * Native signing resolves the registered `client|` alias on chain and produces the bare
- * GalaChain signature format, without a personal-sign prefix or EIP-712 metadata.
+ * Native signing produces the bare GalaChain signature format, without a personal-sign prefix
+ * or EIP-712 metadata. The private-key identity is recovered by the chain.
  */
 export class PrivateKeySigner implements GalaChainSigner {
   private readonly keyBuffer: Buffer;
@@ -145,8 +173,9 @@ export class PrivateKeySigner implements GalaChainSigner {
  * A Gala Wallet signer using native GalaChain signing, with an opt-in personal-sign mode and
  * automatic fallback for older wallets.
  *
- * Native signing resolves the registered `client|` alias on chain. Personal-sign resolves the
- * bare `eth|` identity instead. The legacy EIP-712 `eth_signTypedData` path is not used.
+ * The selected Ethereum account is passed to Gala Wallet. Personal-sign resolves the bare
+ * `eth|` identity; the legacy EIP-712 `eth_signTypedData` path is not used. The fallback calls
+ * `gala_signChainDto([serialize({ ...dto, prefix }), walletAddress, methodName])`.
  */
 export class GalaWalletSigner implements GalaChainSigner {
   /** The wallet address supplied to Gala Wallet for each signing request. */
@@ -160,15 +189,16 @@ export class GalaWalletSigner implements GalaChainSigner {
    *
    * @example
    * ```typescript
-   * const signer = new GalaWalletSigner('client|alice');
+   * const signer = new GalaWalletSigner('0x0123456789012345678901234567890123456789');
    * const signed = await signer.signObject('Trade', { token0: 'GALA', token1: 'GUSDC' });
    * ```
    *
-   * @param walletAddress - The registered Gala Wallet address.
+   * @param walletAddress - The selected Ethereum account (`0x` plus 40 hex digits); Gala Wallet's
+   * `eth|0x...` form is also accepted and normalized.
    * @param options - Select native signing or personal-sign explicitly.
    */
-  constructor(walletAddress: string, options: { scheme?: GalaWalletScheme } = {}) {
-    this.walletAddress = walletAddress;
+  constructor(walletAddress: string, options: { scheme?: GalaWalletScheme | undefined } = {}) {
+    this.walletAddress = normalizeEthereumAccount(walletAddress, true);
     this.effectiveScheme = options.scheme ?? 'native';
   }
 
@@ -200,7 +230,7 @@ export class GalaWalletSigner implements GalaChainSigner {
         method: 'gala_signChainDto',
         params: [serialize(dto), this.walletAddress, methodName, 'native'],
       });
-      return { ...dto, signature: getSignature(signature) };
+      return { ...dto, signature: getNativeSignature(signature) };
     } catch (error: unknown) {
       if (!isUnsupportedNativeSchemeError(error)) {
         throw error;
@@ -224,14 +254,18 @@ export class BrowserWalletSigner implements GalaChainSigner {
    *
    * @example
    * ```typescript
-   * const signer = new BrowserWalletSigner(window.ethereum, 'eth|0x1234');
+   * const signer = new BrowserWalletSigner(window.ethereum, '0x0123456789012345678901234567890123456789');
    * const signed = await signer.signObject('Trade', { token0: 'GALA', token1: 'GUSDC' });
    * ```
    */
   constructor(
     private readonly provider: BrowserWalletProvider,
-    public readonly walletAddress: string,
-  ) {}
+    walletAddress: string,
+  ) {
+    this.walletAddress = normalizeEthereumAccount(walletAddress, false);
+  }
+
+  public readonly walletAddress: string;
 
   /**
    * Signs the prefixed DTO with the EIP-1193 `personal_sign` method.

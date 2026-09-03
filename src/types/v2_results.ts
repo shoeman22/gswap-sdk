@@ -13,6 +13,37 @@ export interface PoolInfo {
   tradingFees: number;
   creator?: string;
   isPrivate?: boolean;
+  flippedFromRequest?: boolean;
+}
+
+/** Pool summary returned by the backend pool-list route. */
+export interface PoolListInfo {
+  contractVersion: 'v2';
+  token0: string;
+  token1: string;
+  token0CompositeKey?: string | undefined;
+  token1CompositeKey?: string | undefined;
+  fee: number;
+  poolName: string;
+  poolRef: string;
+  tickSpacing: number;
+  protocolFees: number;
+  tradingFees: number;
+  creator?: string | undefined;
+  price?: string | undefined;
+  sqrtPrice?: string | undefined;
+  tick?: number | undefined;
+  token0Tvl?: string | undefined;
+  token1Tvl?: string | undefined;
+  tvlUsd?: number | undefined;
+  volume1d?: number | undefined;
+  volume7d?: number | undefined;
+  volume30d?: number | undefined;
+  trades1d?: number | undefined;
+  fee24h?: number | undefined;
+  apr1d?: number | undefined;
+  token0Price?: number | undefined;
+  token1Price?: number | undefined;
 }
 
 /** Current pool price state. */
@@ -85,8 +116,8 @@ export interface QuoteResult {
   fee: number;
   amountIn: string;
   amountOut: string;
-  currentSqrtPrice: string;
-  newSqrtPrice: string;
+  currentSqrtPrice?: string;
+  newSqrtPrice?: string;
   newTick: number;
   tradingFees: string;
   protocolFees: string;
@@ -96,9 +127,9 @@ export interface QuoteResult {
   token1Symbol: string;
   tokenInIsToken0: boolean;
   feeTier: number;
-  currentPrice: BigNumber;
-  newPrice: BigNumber;
-  priceImpact: BigNumber;
+  currentPrice?: BigNumber;
+  newPrice?: BigNumber;
+  priceImpact?: BigNumber;
 }
 
 /** Indexed trade data returned by explore confirmation. */
@@ -114,6 +145,22 @@ export interface IndexedTransaction {
   amount1: number;
   volume: number;
   transactionTime: string | null;
+}
+
+/** A token balance returned by the backend user-assets route. */
+export interface UserAsset {
+  image: string;
+  name: string;
+  decimals: number;
+  verify: boolean;
+  symbol: string;
+  quantity: string;
+}
+
+/** User token balances returned by the backend. */
+export interface UserAssetsResult {
+  tokens: UserAsset[];
+  count: number;
 }
 
 /** Backend add-liquidity estimate. */
@@ -147,6 +194,7 @@ export interface TradingSymbol {
 /** Result envelope returned by the chain gateway for a submitted write. */
 export interface ChainSubmissionResult {
   transactionId?: string;
+  blockNumber?: number | null;
   mode: 'sync';
   result: unknown;
 }

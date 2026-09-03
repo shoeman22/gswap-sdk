@@ -16,25 +16,24 @@ Branded types are a TypeScript pattern that adds compile-time safety by "brandin
 
 | Type          | Description                                                          | Usage                                          |
 | ------------- | -------------------------------------------------------------------- | ---------------------------------------------- |
-| `PriceIn`     | Input price values (can be string, number, or BigNumber)             | When providing price parameters to functions   |
+| `PriceIn`     | Input price values (decimal string or BigNumber)                     | When providing price parameters to functions   |
 | `Price`       | Calculated price values (always BigNumber)                           | When receiving price results from calculations |
-| `SqrtPriceIn` | Input square root price values (can be string, number, or BigNumber) | When providing square root price parameters    |
+| `SqrtPriceIn` | Input square root price values (decimal string or BigNumber)         | When providing square root price parameters    |
 | `SqrtPrice`   | Calculated square root price values (always BigNumber)               | When receiving square root price results       |
 
 ## Usage Example
 
 ### Casting
 
-Consider a function that requires a `PriceIn` type argument. We can pass in a string, number, or BigNumber, but only after casting it to PriceIn:
+Financial inputs are decimal strings or `BigNumber` instances. Branded values are accepted by the SDK's price APIs:
 
 ```typescript
 function myFunction(price: PriceIn) {
   // ...
 }
 
-myFunction(0.5 as PriceIn);
 myFunction('0.5' as PriceIn);
-myFunction(BigNumber(0.5) as PriceIn);
+myFunction(new BigNumber('0.5') as PriceIn);
 
 myFunction(0.5); // ERROR!
 ```

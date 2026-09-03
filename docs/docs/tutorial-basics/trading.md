@@ -4,9 +4,9 @@ sidebar_position: 4
 
 # Trading
 
-Trading uses the `Trade` DTO through the Chain Gateway. The SDK resolves the
-input tokens, chooses the canonical symbols, creates a `uniqueKey`, signs the
-DTO, and submits it synchronously.
+Trading uses the `Trade` DTO through the swap backend's chain-gateway route.
+The SDK resolves the input tokens, chooses the canonical symbols, creates a
+`uniqueKey`, signs the DTO, and submits it synchronously.
 
 ## Exact input
 
@@ -47,5 +47,5 @@ The `uniqueKey` is stable even when `transactionId` is `null` or `''`; use
 `confirm()` to wait for indexer visibility. See
 [Transaction Status](./transaction-status.md).
 
-Never send `Trade` through the retired bundler/socket path. The current gateway
+Never send `Trade` through the retired bundler/socket path. The current backend
 route is method-specific and the body is the signed DTO itself.

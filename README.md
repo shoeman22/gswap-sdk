@@ -20,26 +20,39 @@ const signer = new PrivateKeySigner(process.env.GALACHAIN_PRIVATE_KEY!);
 const gSwap = new GSwap({ signer, walletAddress: process.env.GALACHAIN_ADDRESS, env: 'stage' });
 const quote = await gSwap.quoting.quoteExactInput('GALA', 'GUSDC', '100');
 const tx = await gSwap.swaps.swap('GALA', 'GUSDC', quote.feeTier, {
-  exactIn: '100', amountOutMinimum: quote.amountOut,
+  exactIn: '100',
+  amountOutMinimum: quote.amountOut,
 });
 console.log(await tx.confirm());
 ```
 
-The `env: 'stage'` preset targets the public testnet gateway and staging swap
-backend. Use class keys such as `GALA|Unit|none|none` when a symbol is not
+The `env: 'stage'` preset targets the staging swap backend, and `prod` targets
+the production swap backend. All SDK traffic uses the swap backend. Use class keys such as `GALA|Unit|none|none` when a symbol is not
 available; the SDK resolves registered symbols and orders pool tokens for you.
 Every write returns a `SubmittedTransaction` immediately. Its `uniqueKey` is
 the durable correlation key, and `confirm()` checks the indexed transaction
 or position state. A chain `transactionId` may be empty while indexing catches
 up.
 
+## Hosts and environment presets
+
+The SDK has one network boundary: the swap backend. It does not call public
+GalaChain gateway hosts directly.
+
+| Preset  | `dexBackendBaseUrl`                            |
+| ------- | ---------------------------------------------- |
+| `stage` | `https://swap-backend.stage.defi.ovh.gala.com` |
+| `prod`  | `https://dex-backend-prod1.defi.gala.com`      |
+
+Use `dexBackendBaseUrl` for a test or private deployment override.
+
 ## Signers and identity
 
-| Signer | Scheme | Identity resolved by the chain |
-| --- | --- | --- |
-| `PrivateKeySigner` | GalaChain native signature | Registered `client|...` alias |
-| `GalaWalletSigner` | Native `gala_signChainDto`, with personal-sign fallback for older wallets | Native: registered `client|...`; fallback: bare `eth|...` |
-| `BrowserWalletSigner` | EIP-1193 `personal_sign` | Bare `eth|...` alias |
+| Signer                | Scheme                                                                    | Identity resolved by the chain           |
+| --------------------- | ------------------------------------------------------------------------- | ---------------------------------------- |
+| `PrivateKeySigner`    | GalaChain native signature                                                | Recovered from the private key           |
+| `GalaWalletSigner`    | Native `gala_signChainDto`, with personal-sign fallback for older wallets | Selected Ethereum account (`0x...` form) |
+| `BrowserWalletSigner` | EIP-1193 `personal_sign`                                                  | Selected Ethereum account (`0x...` form) |
 
 Native signing is the default for server keys and current Gala Wallets.
 Browser wallet personal-sign includes the SDK's calculated prefix. EIP-712 is

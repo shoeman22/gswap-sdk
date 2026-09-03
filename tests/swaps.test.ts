@@ -2,9 +2,10 @@ import { expect } from 'chai';
 import type { ChainGateway } from '../src/classes/gateway.js';
 import { GSwapSDKError } from '../src/classes/gswap_sdk_error.js';
 import { SubmittedTransaction } from '../src/classes/submitted_transaction.js';
-import { Swaps } from '../src/classes/swaps.js';
+import { Swaps, type SwapAmount } from '../src/classes/swaps.js';
 import type { GalaChainSigner } from '../src/classes/signers.js';
 import type { Symbols } from '../src/classes/symbols.js';
+import type { IndexedTransaction } from '../src/types/v2_results.js';
 import type { HTTPResponse, HttpRequestor } from '../src/types/http_requestor.js';
 import { resolveTestSymbol } from './helpers.js';
 
@@ -17,7 +18,7 @@ const response: HTTPResponse = {
   text: async () => '{}',
 };
 const noOpRequestor: HttpRequestor = async () => response;
-const signedResult = new SubmittedTransaction({
+const signedResult = new SubmittedTransaction<IndexedTransaction>({
   method: 'Trade',
   transactionId: null,
   uniqueKey: 'gswap-sdk-test',
@@ -39,7 +40,7 @@ function service(): {
     submit: async (
       method: string,
       body: Record<string, unknown>,
-    ): Promise<SubmittedTransaction> => {
+    ): Promise<SubmittedTransaction<IndexedTransaction>> => {
       submissions.push({ method, body });
       return signedResult;
     },
@@ -83,16 +84,16 @@ describe('Swaps', () => {
 
   it('preserves non-negative slippage bounds as decimal strings and appends the signer result', async () => {
     const { swaps, submissions } = service();
-    await swaps.swap(TOKEN_A, TOKEN_B, 500, { exactIn: 10, amountOutMinimum: 0 });
+    await swaps.swap(TOKEN_A, TOKEN_B, 500, { exactIn: '10', amountOutMinimum: '0' });
     expect(submissions[0]?.body).to.include({ sell0Qty: '10', amountOutMinimum: '0' });
   });
 
   it('builds exact-output slippage and rejects non-positive quantities', async () => {
     const { swaps, submissions } = service();
-    await swaps.swap(TOKEN_B, TOKEN_A, 10000, { exactOut: '2.50', amountInMaximum: 3 });
+    await swaps.swap(TOKEN_B, TOKEN_A, 10000, { exactOut: '2.50', amountInMaximum: '3' });
     expect(submissions[0]?.body).to.include({ buy0Qty: '2.5', amountInMaximum: '3' });
     const invalid = await swaps
-      .swap(TOKEN_A, TOKEN_B, 500, { exactIn: 0 })
+      .swap(TOKEN_A, TOKEN_B, 500, { exactIn: '0' })
       .catch((error: unknown) => error);
     expect((invalid as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
   });
@@ -119,7 +120,7 @@ describe('Swaps', () => {
   it('rejects unsupported fee tiers and missing signers', async () => {
     const { swaps, gateway, symbols } = service();
     const badFee = await swaps
-      .swap(TOKEN_A, TOKEN_B, 1, { exactIn: '1' })
+      .swap(TOKEN_A, TOKEN_B, 1 as never, { exactIn: '1' })
       .catch((error: unknown) => error);
     expect(badFee).to.be.instanceOf(GSwapSDKError);
     expect((badFee as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
@@ -129,5 +130,14 @@ describe('Swaps', () => {
       .catch((error: unknown) => error);
     expect(noSigner).to.be.instanceOf(GSwapSDKError);
     expect((noSigner as GSwapSDKError).code).to.equal('NO_SIGNER');
+
+    const malformedExactIn = await swaps
+      .swap(TOKEN_A, TOKEN_B, 500, { exactIn: undefined } as unknown as SwapAmount)
+      .catch((error: unknown) => error);
+    expect((malformedExactIn as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
+    const malformedExactOut = await swaps
+      .swap(TOKEN_A, TOKEN_B, 500, { exactOut: undefined } as unknown as SwapAmount)
+      .catch((error: unknown) => error);
+    expect((malformedExactOut as GSwapSDKError).code).to.equal('VALIDATION_ERROR');
   });
 });

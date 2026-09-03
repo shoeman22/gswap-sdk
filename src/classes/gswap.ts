@@ -11,11 +11,18 @@ import type { HttpRequestor } from '../types/http_requestor.js';
 import type { GSwapEnv } from '../types/env.js';
 import { GSWAP_ENVIRONMENTS } from '../types/env.js';
 
+/** Options for constructing a backend-routed SDK client. */
+export interface GSwapOptions {
+  signer?: GalaChainSigner | undefined;
+  walletAddress?: string | undefined;
+  env?: GSwapEnv | undefined;
+  dexBackendBaseUrl?: string | undefined;
+  httpRequestor?: HttpRequestor | undefined;
+  chainCallTimeoutMs?: number | undefined;
+}
+
 /** Main entry point for the current GalaChainDex SDK. */
 export class GSwap {
-  public readonly gatewayBaseUrl: string;
-  public readonly dexContractBasePath: '/api/asset/dex-contract';
-  public readonly tokenContractBasePath: '/api/asset/token-contract';
   public readonly dexBackendBaseUrl: string;
   public readonly chainCallTimeoutMs: number;
   public readonly signer: GalaChainSigner | undefined;
@@ -37,19 +44,8 @@ export class GSwap {
    * const symbols = await gSwap.symbols.list();
    * ```
    */
-  constructor(options?: {
-    signer?: GalaChainSigner;
-    walletAddress?: string;
-    env?: GSwapEnv;
-    gatewayBaseUrl?: string;
-    dexBackendBaseUrl?: string;
-    httpRequestor?: HttpRequestor;
-    chainCallTimeoutMs?: number;
-  }) {
+  constructor(options?: GSwapOptions) {
     const environment = GSWAP_ENVIRONMENTS[options?.env ?? 'prod'];
-    this.gatewayBaseUrl = trimTrailingSlash(options?.gatewayBaseUrl ?? environment.gatewayBaseUrl);
-    this.dexContractBasePath = environment.dexContractBasePath;
-    this.tokenContractBasePath = environment.tokenContractBasePath;
     this.dexBackendBaseUrl = trimTrailingSlash(
       options?.dexBackendBaseUrl ?? environment.dexBackendBaseUrl,
     );
@@ -57,10 +53,8 @@ export class GSwap {
     this.signer = options?.signer;
     this.walletAddress = options?.walletAddress;
 
-    const httpClient = new HttpClient(options?.httpRequestor);
+    const httpClient = new HttpClient(options?.httpRequestor, this.chainCallTimeoutMs);
     this.gateway = new ChainGateway({
-      gatewayBaseUrl: this.gatewayBaseUrl,
-      dexContractBasePath: this.dexContractBasePath,
       dexBackendBaseUrl: this.dexBackendBaseUrl,
       chainCallTimeoutMs: this.chainCallTimeoutMs,
       ...(options?.httpRequestor === undefined ? {} : { httpRequestor: options.httpRequestor }),

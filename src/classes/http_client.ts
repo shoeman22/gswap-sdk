@@ -1,10 +1,15 @@
 import type { HttpRequestor } from '../types/http_requestor.js';
 import { debugLog } from '../utils/debug.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
+import { readResponseBody, requestWithTimeout } from '../utils/transport.js';
+import { SDK_VERSION } from '../version.js';
 
 export class HttpClient {
   /** Create an HTTP client around fetch or an injected requestor. */
-  constructor(private readonly httpRequestor: HttpRequestor = fetch) {}
+  constructor(
+    private readonly httpRequestor: HttpRequestor = fetch,
+    private readonly timeoutMs = 30_000,
+  ) {}
 
   private async sendRequest<TReturnType>(
     method: 'POST' | 'GET',
@@ -12,24 +17,31 @@ export class HttpClient {
     basePath: string,
     endpoint: string,
     body?: unknown,
+    options?: Pick<RequestInit, 'signal'>,
   ): Promise<TReturnType> {
     const url = `${baseUrl}${basePath}${endpoint}`;
     debugLog(`Sending request to ${url} with body:`, body);
 
-    const response = await this.httpRequestor(url, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'GalaChain-SDK/0.0',
+    const response = await requestWithTimeout(
+      this.httpRequestor,
+      url,
+      {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': `GalaChain-SDK/${SDK_VERSION}`,
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
+      this.timeoutMs,
+    );
 
     if (!response.ok) {
       throw await GSwapSDKError.fromErrorResponse(url, response);
     }
 
-    const json = await response.json();
+    const json = await readResponseBody(response);
     debugLog(`Response from ${baseUrl}${basePath}${endpoint}:`, json);
 
     return json as TReturnType;
@@ -51,10 +63,11 @@ export class HttpClient {
     basePath: string,
     endpoint: string,
     params?: Record<string, string>,
+    options?: Pick<RequestInit, 'signal'>,
   ): Promise<TReturnType> {
     const searchParams = params ? new URLSearchParams(params) : undefined;
     const endpointWithParams = searchParams ? `${endpoint}?${searchParams.toString()}` : endpoint;
 
-    return this.sendRequest('GET', baseUrl, basePath, endpointWithParams, undefined);
+    return this.sendRequest('GET', baseUrl, basePath, endpointWithParams, undefined, options);
   }
 }

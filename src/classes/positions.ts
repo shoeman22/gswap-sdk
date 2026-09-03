@@ -1,6 +1,6 @@
 import BigNumber from 'bignumber.js';
 import { GSwapSDKError } from './gswap_sdk_error.js';
-import type { ChainGateway } from './gateway.js';
+import type { ChainGateway, ChainSubmitOptions } from './gateway.js';
 import { HttpClient } from './http_client.js';
 import type { GalaChainSigner } from './signers.js';
 import type { Symbols } from './symbols.js';
@@ -18,20 +18,24 @@ import type {
   RemoveLiquidityEstimate,
 } from '../types/v2_results.js';
 import { type TokenRef, compositeKeyOf, parseTokenClassKey } from '../utils/ordering.js';
-import { validateNumericAmount } from '../utils/validation.js';
+import { validateFee, validateNumericAmount } from '../utils/validation.js';
 import { alignTickDown, alignTickUp, assertTickRange, tickFromPrice } from '../utils/ticks.js';
 
-type PositionGateway = Pick<ChainGateway, 'submit' | 'httpRequestor' | 'dexBackendBaseUrl'>;
-type PositionSymbols = Pick<Symbols, 'resolve' | 'orderPair'>;
+type PositionGateway = Pick<ChainGateway, 'submit' | 'httpRequestor' | 'dexBackendBaseUrl'> & {
+  requestTimeoutMs?: number | undefined;
+};
+type PositionSymbols = Pick<Symbols, 'resolve' | 'orderPair'> & { invalidate?: () => void };
 
 interface BackendEnvelope<TData> {
   data: TData;
 }
 
 interface PositionWire {
+  token0CompositeKey?: string;
+  token1CompositeKey?: string;
   token0Symbol: string;
   token1Symbol: string;
-  fee: number;
+  fee: FEE_TIER;
   tickLower: number;
   tickUpper: number;
   liquidity: string;
@@ -85,7 +89,7 @@ export class Positions {
     private readonly signer?: GalaChainSigner,
     private readonly walletAddress?: string,
   ) {
-    this.http = new HttpClient(gateway.httpRequestor);
+    this.http = new HttpClient(gateway.httpRequestor, gateway.requestTimeoutMs ?? 30_000);
   }
 
   private readonly http: HttpClient;
@@ -119,24 +123,31 @@ export class Positions {
    * });
    * ```
    */
-  async getPosition(args: {
-    token0: TokenRef;
-    token1: TokenRef;
-    fee: number;
-    owner: string;
-    tickLower: number;
-    tickUpper: number;
-  }): Promise<Position | null> {
+  async getPosition(
+    args: {
+      token0: TokenRef;
+      token1: TokenRef;
+      fee: FEE_TIER;
+      owner: string;
+      tickLower: number;
+      tickUpper: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<Position | null> {
     const pair = await this.symbols.orderPair(args.token0, args.token1);
     const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
-    const response = await this.getNullable<PositionWire>('/position', {
-      token0: pair.token0.symbol,
-      token1: pair.token1.symbol,
-      fee: `${args.fee}`,
-      owner: args.owner,
-      tickLower: `${ticks.tickLower}`,
-      tickUpper: `${ticks.tickUpper}`,
-    });
+    const response = await this.getNullable<PositionWire>(
+      '/position',
+      {
+        token0: pair.token0.symbol,
+        token1: pair.token1.symbol,
+        fee: `${args.fee}`,
+        owner: args.owner,
+        tickLower: `${ticks.tickLower}`,
+        tickUpper: `${ticks.tickUpper}`,
+      },
+      signal,
+    );
     return response === null ? null : this.mapPosition(response.data);
   }
 
@@ -156,7 +167,7 @@ export class Positions {
   async estimateAddLiquidity(args: {
     token0: TokenRef;
     token1: TokenRef;
-    fee: number;
+    fee: FEE_TIER;
     tickLower: number;
     tickUpper: number;
     amount: NumericAmount;
@@ -191,7 +202,7 @@ export class Positions {
   async estimateRemoveLiquidity(args: {
     token0: TokenRef;
     token1: TokenRef;
-    fee: number;
+    fee: FEE_TIER;
     tickLower: number;
     tickUpper: number;
     liquidity: NumericAmount;
@@ -225,21 +236,22 @@ export class Positions {
   async addLiquidityByTicks(args: {
     token0: TokenRef;
     token1: TokenRef;
-    fee: number;
+    fee: FEE_TIER;
     tickLower: number;
     tickUpper: number;
     amount: NumericAmount;
     amountIsToken0: boolean;
   }) {
+    validateFee(args.fee);
     const pair = await this.symbols.orderPair(args.token0, args.token1);
     const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
-    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee as FEE_TIER);
+    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee);
     validateNumericAmount(args.amount, 'amount');
     const amount = new BigNumber(args.amount).toFixed();
     const dto: AddLiquidityDTO = {
       token0: pair.token0.symbol,
       token1: pair.token1.symbol,
-      fee: args.fee as FEE_TIER,
+      fee: args.fee,
       tickLower: ticks.tickLower,
       tickUpper: ticks.tickUpper,
       uniqueKey: this.uniqueKey(),
@@ -247,7 +259,13 @@ export class Positions {
         ? { depositQuantityToken0: amount }
         : { depositQuantityToken1: amount }),
     };
-    return this.submit('AddLiquidity', dto as unknown as Record<string, unknown>);
+    return this.submit('AddLiquidity', dto as unknown as Record<string, unknown>, {
+      token0: pair.token0.symbol,
+      token1: pair.token1.symbol,
+      fee: args.fee,
+      tickLower: ticks.tickLower,
+      tickUpper: ticks.tickUpper,
+    });
   }
 
   /**
@@ -267,12 +285,15 @@ export class Positions {
   async addLiquidityByPrice(args: {
     token0: TokenRef;
     token1: TokenRef;
-    fee: number;
+    fee: FEE_TIER;
     minPrice: PriceIn;
     maxPrice: PriceIn;
     amount: NumericAmount;
     amountIsToken0: boolean;
   }) {
+    validateFee(args.fee);
+    this.rejectNumber(args.minPrice, 'minPrice');
+    this.rejectNumber(args.maxPrice, 'maxPrice');
     const minPrice = new BigNumber(args.minPrice);
     const maxPrice = new BigNumber(args.maxPrice);
     if (
@@ -320,15 +341,16 @@ export class Positions {
   async removeLiquidity(args: {
     token0: TokenRef;
     token1: TokenRef;
-    fee: number;
+    fee: FEE_TIER;
     tickLower: number;
     tickUpper: number;
-    amount0?: NumericAmount;
-    amount1?: NumericAmount;
+    amount0?: NumericAmount | undefined;
+    amount1?: NumericAmount | undefined;
   }) {
+    validateFee(args.fee);
     const pair = await this.symbols.orderPair(args.token0, args.token1);
     const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
-    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee as FEE_TIER);
+    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee);
     if (args.amount0 !== undefined && args.amount1 !== undefined) {
       throw new GSwapSDKError('Provide at most one of amount0 or amount1.', 'VALIDATION_ERROR');
     }
@@ -347,13 +369,19 @@ export class Positions {
     const dto: RemoveLiquidityDTO = {
       token0: pair.token0.symbol,
       token1: pair.token1.symbol,
-      fee: args.fee as FEE_TIER,
+      fee: args.fee,
       tickLower: ticks.tickLower,
       tickUpper: ticks.tickUpper,
       uniqueKey: this.uniqueKey(),
       ...withdrawal,
     };
-    return this.submit('RemoveLiquidity', dto as unknown as Record<string, unknown>);
+    return this.submit('RemoveLiquidity', dto as unknown as Record<string, unknown>, {
+      token0: pair.token0.symbol,
+      token1: pair.token1.symbol,
+      fee: args.fee,
+      tickLower: ticks.tickLower,
+      tickUpper: ticks.tickUpper,
+    });
   }
 
   /**
@@ -372,22 +400,29 @@ export class Positions {
   async collectPositionFees(args: {
     token0: TokenRef;
     token1: TokenRef;
-    fee: number;
+    fee: FEE_TIER;
     tickLower: number;
     tickUpper: number;
   }) {
+    validateFee(args.fee);
     const pair = await this.symbols.orderPair(args.token0, args.token1);
     const ticks = this.canonicalTicks(args.tickLower, args.tickUpper, pair.flipped);
-    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee as FEE_TIER);
+    assertTickRange(ticks.tickLower, ticks.tickUpper, args.fee);
     const dto: CollectPositionFeesDTO = {
       token0: pair.token0.symbol,
       token1: pair.token1.symbol,
-      fee: args.fee as FEE_TIER,
+      fee: args.fee,
       tickLower: ticks.tickLower,
       tickUpper: ticks.tickUpper,
       uniqueKey: this.uniqueKey(),
     };
-    return this.submit('CollectPositionFees', dto as unknown as Record<string, unknown>);
+    return this.submit('CollectPositionFees', dto as unknown as Record<string, unknown>, {
+      token0: pair.token0.symbol,
+      token1: pair.token1.symbol,
+      fee: args.fee,
+      tickLower: ticks.tickLower,
+      tickUpper: ticks.tickUpper,
+    });
   }
 
   /**
@@ -407,11 +442,11 @@ export class Positions {
   async createPool(args: {
     token0: TokenRef;
     token1: TokenRef;
-    fee: number;
-    startingPrice?: NumericAmount;
-    startingSqrtPrice?: NumericAmount;
-    isPrivate?: boolean;
-    privateAccess?: string[];
+    fee: FEE_TIER;
+    startingPrice?: NumericAmount | undefined;
+    startingSqrtPrice?: NumericAmount | undefined;
+    isPrivate?: boolean | undefined;
+    privateAccess?: string[] | undefined;
   }) {
     const hasPrice = args.startingPrice !== undefined;
     const hasSqrtPrice = args.startingSqrtPrice !== undefined;
@@ -421,6 +456,7 @@ export class Positions {
         'VALIDATION_ERROR',
       );
     }
+    validateFee(args.fee);
     const [tokenA, tokenB] = await Promise.all([
       this.resolveCreateToken(args.token0),
       this.resolveCreateToken(args.token1),
@@ -430,6 +466,7 @@ export class Positions {
     const sourcePriceInput = hasPrice
       ? (args.startingPrice as NumericAmount)
       : (args.startingSqrtPrice as NumericAmount);
+    this.rejectNumber(sourcePriceInput, hasPrice ? 'startingPrice' : 'startingSqrtPrice');
     const sourcePrice = new BigNumber(sourcePriceInput);
     if (!sourcePrice.isFinite() || sourcePrice.isLessThanOrEqualTo(0)) {
       throw new GSwapSDKError('Starting price must be finite and positive.', 'VALIDATION_ERROR');
@@ -440,7 +477,7 @@ export class Positions {
       token1Key: token1.classKey,
       token0Symbol: token0.symbol,
       token1Symbol: token1.symbol,
-      fee: args.fee as FEE_TIER,
+      fee: args.fee,
       uniqueKey: this.uniqueKey(),
       ...(hasPrice
         ? { startingPrice: canonicalPrice.toFixed() }
@@ -448,35 +485,59 @@ export class Positions {
       ...(args.isPrivate === undefined ? {} : { isPrivate: args.isPrivate }),
       ...(args.privateAccess === undefined ? {} : { privateAccess: args.privateAccess }),
     };
-    return this.submit('CreatePool', dto as unknown as Record<string, unknown>);
+    const transaction = await this.submit('CreatePool', dto as unknown as Record<string, unknown>);
+    this.symbols.invalidate?.();
+    return transaction;
   }
 
-  private async submit(method: string, dto: Record<string, unknown>) {
+  private async submit(
+    method: string,
+    dto: Record<string, unknown>,
+    identity?: {
+      token0: string;
+      token1: string;
+      fee: FEE_TIER;
+      tickLower: number;
+      tickUpper: number;
+    },
+  ) {
     if (this.signer === undefined) throw GSwapSDKError.noSignerError();
     const signed = await this.signer.signObject(method, dto);
     const submitOptions =
       this.walletAddress === undefined ? {} : { walletAddress: this.walletAddress };
-    return this.gateway.submit(method, signed, submitOptions);
+    const owner = this.walletAddress;
+    const options: ChainSubmitOptions = {
+      ...submitOptions,
+      ...(identity === undefined || owner === undefined
+        ? {}
+        : {
+            positionConfirmation: (signal) => this.getPosition({ ...identity, owner }, signal),
+          }),
+    };
+    return this.gateway.submit(method, signed, options);
   }
 
   private async get<TData>(
     endpoint: string,
     params: Record<string, string>,
+    signal?: AbortSignal,
   ): Promise<BackendEnvelope<TData>> {
     return this.http.sendGetRequest<BackendEnvelope<TData>>(
       this.gateway.dexBackendBaseUrl,
       '/v2/trade',
       endpoint,
       params,
+      signal === undefined ? undefined : { signal },
     );
   }
 
   private async getNullable<TData>(
     endpoint: string,
     params: Record<string, string>,
+    signal?: AbortSignal,
   ): Promise<BackendEnvelope<TData> | null> {
     try {
-      return await this.get<TData>(endpoint, params);
+      return await this.get<TData>(endpoint, params, signal);
     } catch (error: unknown) {
       if (this.isNotFound(error)) return null;
       throw error;
@@ -492,6 +553,12 @@ export class Positions {
     return {
       token0Symbol: position.token0Symbol,
       token1Symbol: position.token1Symbol,
+      ...(position.token0CompositeKey === undefined
+        ? {}
+        : { token0CompositeKey: position.token0CompositeKey }),
+      ...(position.token1CompositeKey === undefined
+        ? {}
+        : { token1CompositeKey: position.token1CompositeKey }),
       fee: position.fee,
       tickLower: position.tickLower,
       tickUpper: position.tickUpper,
@@ -524,8 +591,17 @@ export class Positions {
     throw new GSwapSDKError(`Unsupported fee tier: ${fee}.`, 'VALIDATION_ERROR');
   }
 
+  private rejectNumber(value: unknown, parameterName: string): void {
+    if (typeof value === 'number') {
+      throw new GSwapSDKError(
+        `Invalid ${parameterName}: use a decimal string or BigNumber, not a JavaScript number`,
+        'VALIDATION_ERROR',
+      );
+    }
+  }
+
   private uniqueKey(): string {
-    return `gswap-sdk-${crypto.randomUUID()}`;
+    return `gswap-sdk-${globalThis.crypto.randomUUID()}`;
   }
 
   private async resolveCreateToken(ref: TokenRef): Promise<ResolvedCreateToken> {

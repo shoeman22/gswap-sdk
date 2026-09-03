@@ -98,18 +98,6 @@ export class GSwapSDKError extends Error {
     });
   }
 
-  /** Create the error used when caller-supplied token order is invalid. */
-  public static incorrectTokenOrderingError(
-    specifiedToken0: GalaChainTokenClassKey | string,
-    specifiedToken1: GalaChainTokenClassKey | string,
-  ): GSwapSDKError {
-    return new GSwapSDKError(
-      'Token ordering is incorrect. token0 should sort below token1.',
-      'INCORRECT_TOKEN_ORDERING',
-      { specifiedToken0, specifiedToken1 },
-    );
-  }
-
   /** Convert an unexpected HTTP response into an SDK error. */
   public static async fromErrorResponse(
     url: string,

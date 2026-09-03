@@ -8,9 +8,8 @@ import { resolveTestSymbol } from './helpers.js';
 
 const BASE = 'https://swap.example.test';
 
-function response(body: unknown): HTTPResponse {
-  const text = JSON.stringify(body);
-  return { ok: true, status: 200, json: async () => body, text: async () => text };
+function response(body: unknown, status = 200): HTTPResponse {
+  return new Response(JSON.stringify(body), { status });
 }
 
 function symbols(): Pick<Symbols, 'resolve'> {
@@ -18,39 +17,52 @@ function symbols(): Pick<Symbols, 'resolve'> {
 }
 
 function gateway(requestor: HttpRequestor): ChainGateway {
-  return new ChainGateway({
-    gatewayBaseUrl: 'https://gateway.example.test',
-    dexContractBasePath: '/api/asset/dex-contract',
-    dexBackendBaseUrl: BASE,
-    httpRequestor: requestor,
-  });
+  return new ChainGateway({ dexBackendBaseUrl: BASE, httpRequestor: requestor });
 }
 
 describe('Pools', () => {
-  it('follows FetchPools bookmarks', async () => {
-    const requests: Array<{ method: string; body: unknown }> = [];
-    const requestor: HttpRequestor = async (_url, options) => {
-      const body = options?.body;
-      if (typeof body !== 'string') throw new Error('Expected a serialized request body.');
-      requests.push({ method: 'FetchPools', body: JSON.parse(body) as unknown });
-      const data =
-        requests.length === 1
-          ? { results: [{ token0: 'AAA' }], nextPageBookmark: 'next' }
-          : { results: [{ token0: 'BBB' }], nextPageBookmark: '' };
-      return response({ Status: 1, Data: data });
+  it('gets the pool list from the backend without pagination or gateway calls', async () => {
+    const calls: string[] = [];
+    const requestor: HttpRequestor = async (url) => {
+      calls.push(url);
+      return response({
+        status: 200,
+        error: false,
+        data: [
+          {
+            contractVersion: 'v2',
+            token0: 'AAA',
+            token1: 'BBB',
+            fee: 3000,
+            poolName: 'AAA/BBB',
+            poolRef: 'AAA$BBB$3000',
+            tickSpacing: 60,
+            protocolFees: 3,
+            tradingFees: 3000,
+          },
+        ],
+      });
     };
-    const pools = new Pools(gateway(requestor), symbols());
-    const result = await pools.getPools();
-    expect(result).to.deep.equal([{ token0: 'AAA' }, { token0: 'BBB' }]);
-    expect(requests).to.deep.equal([
-      { method: 'FetchPools', body: {} },
-      { method: 'FetchPools', body: { bookmark: 'next' } },
+    const result = await new Pools(gateway(requestor), symbols()).getPools();
+    expect(result).to.deep.equal([
+      {
+        contractVersion: 'v2',
+        token0: 'AAA',
+        token1: 'BBB',
+        fee: 3000,
+        poolName: 'AAA/BBB',
+        poolRef: 'AAA$BBB$3000',
+        tickSpacing: 60,
+        protocolFees: 3,
+        tradingFees: 3000,
+      },
     ]);
+    expect(calls).to.deep.equal([`${BASE}/v2/trade/pools`]);
   });
 
-  it('uses resolved caller order for backend pool and slot0 requests', async () => {
+  it('uses caller order for pool and slot0 backend requests', async () => {
     const calls: string[] = [];
-    const requestor: HttpRequestor = async (url: string) => {
+    const requestor: HttpRequestor = async (url) => {
       calls.push(url);
       return response({
         data: { token0: 'GALA', token1: 'GUSDC', fee: 3000, flippedFromRequest: true },
@@ -65,20 +77,23 @@ describe('Pools', () => {
     ]);
   });
 
-  it('orders symbols for the composite gateway read', async () => {
-    const requests: Array<{ method: string; body: unknown }> = [];
-    const requestor: HttpRequestor = async (_url, options) => {
-      requests.push({
-        method: 'FetchCompositePoolData',
-        body: JSON.parse(typeof options?.body === 'string' ? options.body : '{}') as unknown,
-      });
-      return response({ Status: 1, Data: { pool: { token0: 'GALA', token1: 'GUSDC' } } });
+  it('orders the composite-pool request and maps empty backend lists', async () => {
+    const calls: string[] = [];
+    const requestor: HttpRequestor = async (url) => {
+      calls.push(url);
+      return response({ data: { pool: { token0: 'GALA', token1: 'GUSDC' } } });
     };
     const pools = new Pools(gateway(requestor), symbols());
     await pools.getCompositePool('GUSDC', 'GALA', 3000);
-    expect(requests).to.deep.equal([
-      { method: 'FetchCompositePoolData', body: { token0: 'GALA', token1: 'GUSDC', fee: 3000 } },
+    expect(calls).to.deep.equal([
+      `${BASE}/v2/trade/composite-pool?token0=GALA&token1=GUSDC&fee=3000`,
     ]);
+
+    const empty = new Pools(
+      gateway(async () => response({ data: [] })),
+      symbols(),
+    );
+    expect(await empty.getPools()).to.deep.equal([]);
   });
 
   it('maps backend failures and validates fee tiers', async () => {
@@ -90,40 +105,120 @@ describe('Pools', () => {
     );
     const error = await failing.getPool('GALA', 'GUSDC', 3000).catch((caught: unknown) => caught);
     expect((error as Error).message).to.equal('Pool request failed.');
-    const invalidFee = await failing.getPool('GALA', 'GUSDC', 1).catch((caught: unknown) => caught);
+    const invalidFee = await failing
+      .getPool('GALA', 'GUSDC', 1 as never)
+      .catch((caught: unknown) => caught);
     expect((invalidFee as GSwapSDKError).message).to.include('Invalid fee tier');
 
-    const empty = new Pools(
-      gateway(async () => response({ Status: 1, Data: {} })),
+    const invalidList = new Pools(
+      gateway(async () => response({ data: { not: 'an array' } })),
       symbols(),
     );
-    expect(await empty.getPools()).to.deep.equal([]);
-    const unresolved = new Pools(
+    const invalidListError = await invalidList.getPools().catch((caught: unknown) => caught);
+    expect((invalidListError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+
+    const invalidRow = new Pools(
+      gateway(async () =>
+        response({ data: [{ contractVersion: 'v2', token0: 'A', token1: 'B', tvlUsd: 'bad' }] }),
+      ),
+      symbols(),
+    );
+    const invalidRowError = await invalidRow.getPools().catch((caught: unknown) => caught);
+    expect((invalidRowError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+
+    const listRow = {
+      contractVersion: 'v2' as const,
+      token0: 'A',
+      token1: 'B',
+      token0CompositeKey: 'A$Unit$none$none',
+      token1CompositeKey: 'B$Unit$none$none',
+      fee: 3000,
+      poolName: 'A/B',
+      poolRef: 'A$B$3000',
+      tickSpacing: 60,
+      protocolFees: 3,
+      tradingFees: 3000,
+      creator: 'client|owner',
+      price: '1',
+      sqrtPrice: '1',
+      tick: 0,
+      token0Tvl: '100',
+      token1Tvl: '100',
+      tvlUsd: 100,
+      volume1d: 10,
+      volume7d: 20,
+      volume30d: 30,
+      trades1d: 1,
+      fee24h: 0.03,
+      apr1d: 0.1,
+      token0Price: 1,
+      token1Price: 1,
+    };
+    const fullRow = new Pools(
+      gateway(async () => response({ data: [listRow] })),
+      symbols(),
+    );
+    expect((await fullRow.getPools())[0]).to.deep.equal(listRow);
+    const invalidStringField = new Pools(
+      gateway(async () => response({ data: [{ ...listRow, price: 1 }] })),
+      symbols(),
+    );
+    const invalidStringFieldError = await invalidStringField
+      .getPools()
+      .catch((caught: unknown) => caught);
+    expect((invalidStringFieldError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+    const invalidNumberField = new Pools(
+      gateway(async () => response({ data: [{ ...listRow, tvlUsd: 'bad' }] })),
+      symbols(),
+    );
+    const invalidNumberFieldError = await invalidNumberField
+      .getPools()
+      .catch((caught: unknown) => caught);
+    expect((invalidNumberFieldError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+    const invalidPrimitiveRow = new Pools(
+      gateway(async () => response({ data: [null] })),
+      symbols(),
+    );
+    const invalidPrimitiveRowError = await invalidPrimitiveRow
+      .getPools()
+      .catch((caught: unknown) => caught);
+    expect((invalidPrimitiveRowError as GSwapSDKError).code).to.equal('INVALID_CHAIN_RESPONSE');
+
+    const timedGateway = new ChainGateway({
+      dexBackendBaseUrl: BASE,
+      httpRequestor: async () => response({ data: [] }),
+      chainCallTimeoutMs: 5,
+    });
+    await new Pools(timedGateway, symbols()).getPools({ signal: new AbortController().signal });
+
+    const sdkFailure = new GSwapSDKError('backend rejected', 'HTTP_ERROR');
+    const preservedFailure = new Pools(
+      gateway(async () => {
+        throw sdkFailure;
+      }),
+      symbols(),
+    );
+    const preserved = await preservedFailure
+      .getPool('GALA', 'GUSDC', 3000)
+      .catch((caught: unknown) => caught);
+    expect(preserved).to.equal(sdkFailure);
+
+    const emptySymbol = new Pools(
       gateway(async () => response({ data: {} })),
       {
         resolve: async () => ({
           symbol: '',
-          collection: '',
+          collection: 'A',
           category: 'Unit',
           type: 'none',
           additionalKey: 'none',
-          decimals: 18,
+          decimals: 8,
         }),
       },
     );
-    const unresolvedError = await unresolved
-      .getPool('A', 'B', 0)
+    const emptySymbolError = await emptySymbol
+      .getPool('A', 'B', 3000)
       .catch((caught: unknown) => caught);
-    expect((unresolvedError as GSwapSDKError).code).to.equal('SYMBOL_NOT_FOUND');
-    const sdkFailure = new Pools(
-      gateway(async () => {
-        throw new GSwapSDKError('known failure', 'KNOWN');
-      }),
-      symbols(),
-    );
-    const known = await sdkFailure
-      .getPool('GALA', 'GUSDC', 3000)
-      .catch((caught: unknown) => caught);
-    expect((known as GSwapSDKError).code).to.equal('KNOWN');
+    expect((emptySymbolError as GSwapSDKError).code).to.equal('SYMBOL_NOT_FOUND');
   });
 });

@@ -1,69 +1,105 @@
 import type { HttpRequestor, HTTPResponse } from '../types/http_requestor.js';
-import {
-  getObjectProperty,
-  getStringProperty,
-  parseJson,
-  GSwapSDKError,
-} from './gswap_sdk_error.js';
+import { getObjectProperty, getStringProperty, GSwapSDKError } from './gswap_sdk_error.js';
 import { SubmittedTransaction } from './submitted_transaction.js';
+import { readResponseBody, requestWithTimeout } from '../utils/transport.js';
+import type { IndexedTransaction, Position } from '../types/v2_results.js';
 
 /** Options for a chain-gateway client. */
 export interface ChainGatewayOptions {
-  gatewayBaseUrl: string;
-  dexContractBasePath: string;
   dexBackendBaseUrl: string;
-  httpRequestor?: HttpRequestor;
-  walletAddress?: string;
-  chainCallTimeoutMs?: number;
+  httpRequestor?: HttpRequestor | undefined;
+  walletAddress?: string | undefined;
+  chainCallTimeoutMs?: number | undefined;
 }
 
-/** Thin client for unsigned GalaChainDex reads and synchronous v2 writes. */
+/** Optional attribution and operation-specific confirmation hooks for a write. */
+export interface ChainSubmitOptions {
+  walletAddress?: string | undefined;
+  positionConfirmation?: ((signal: AbortSignal) => Promise<Position | null>) | undefined;
+}
+
+/** Thin client for backend-routed synchronous v2 writes. */
 export class ChainGateway {
   private readonly requestor: HttpRequestor;
   private readonly walletAddress: string | undefined;
   private readonly chainCallTimeoutMs: number;
-  public readonly gatewayBaseUrl: string;
-  public readonly dexContractBasePath: string;
+  public readonly requestTimeoutMs: number;
   public readonly dexBackendBaseUrl: string;
 
   /** Create a chain gateway client. */
   constructor(options: ChainGatewayOptions) {
-    this.gatewayBaseUrl = trimTrailingSlash(options.gatewayBaseUrl);
-    this.dexContractBasePath = normalizePath(options.dexContractBasePath);
     this.dexBackendBaseUrl = trimTrailingSlash(options.dexBackendBaseUrl);
     this.requestor = options.httpRequestor ?? fetch.bind(globalThis);
     this.walletAddress = options.walletAddress;
     this.chainCallTimeoutMs = options.chainCallTimeoutMs ?? 30_000;
+    this.requestTimeoutMs = this.chainCallTimeoutMs;
   }
 
   /** Submit a signed v2 DTO through the chain gateway. */
   public async submit(
+    method: 'Trade',
+    signedBody: Record<string, unknown>,
+    options?: ChainSubmitOptions,
+  ): Promise<SubmittedTransaction<IndexedTransaction>>;
+  public async submit(
     method: string,
     signedBody: Record<string, unknown>,
-    options?: { walletAddress?: string },
+    options?: ChainSubmitOptions,
+  ): Promise<SubmittedTransaction<IndexedTransaction | Position | null>>;
+  public async submit(
+    method: string,
+    signedBody: Record<string, unknown>,
+    options?: ChainSubmitOptions,
   ): Promise<SubmittedTransaction> {
     const url = `${this.dexBackendBaseUrl}/v1/chain/asset/dex-contract/${method}`;
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     const walletAddress = options?.walletAddress ?? this.walletAddress;
     if (walletAddress !== undefined) headers['X-Wallet-Address'] = walletAddress;
-    const response = await this.requestor(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(signedBody),
-    });
-    const body = await readBody(response);
+    let response: HTTPResponse;
+    try {
+      response = await requestWithTimeout(
+        this.requestor,
+        url,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(signedBody),
+        },
+        this.chainCallTimeoutMs,
+      );
+    } catch (error: unknown) {
+      if (error instanceof GSwapSDKError && error.code === 'REQUEST_TIMEOUT') {
+        throw new GSwapSDKError(
+          'The submission outcome is unknown because the gateway request timed out. Confirm before retrying.',
+          'SUBMISSION_OUTCOME_UNKNOWN',
+          { uniqueKey: getStringProperty(signedBody, 'uniqueKey') ?? '', cause: error },
+        );
+      }
+      throw error;
+    }
+    const body = await readResponseBody(response);
 
     if (!response.ok) {
       throw gatewayError(response, body, url);
     }
 
     const envelope = asRecord(body);
-    const data = asRecord(envelope?.['data']) ?? envelope;
+    const data = asRecord(envelope?.['data'] ?? envelope?.['Data']);
+    if (data === undefined) {
+      throw invalidGatewayResponse(response, body, url, 'Expected a data object.');
+    }
     const transactionId = getStringProperty(data, 'transactionId');
     const mode = getStringProperty(data, 'mode');
-    if (mode !== undefined && mode !== 'sync') {
+    const rawTransactionId = data['transactionId'];
+    const bodyBlockNumber = data['blockNumber'];
+    if (
+      mode !== 'sync' ||
+      !('result' in data) ||
+      ('transactionId' in data && typeof rawTransactionId !== 'string') ||
+      (bodyBlockNumber !== undefined && bodyBlockNumber !== null && !isBlockNumber(bodyBlockNumber))
+    ) {
       throw new GSwapSDKError(
-        `Unsupported gateway transaction mode: ${mode}`,
+        'Gateway response must contain data.mode="sync", data.result, and a string transactionId when present.',
         'INVALID_GATEWAY_RESPONSE',
         {
           status: response.status,
@@ -74,75 +110,31 @@ export class ChainGateway {
     }
 
     const uniqueKey = getStringProperty(signedBody, 'uniqueKey') ?? '';
+    const headerTransactionId = readHeader(response, 'x-transaction-id');
+    const resolvedTransactionId =
+      transactionId === undefined || transactionId === '' ? headerTransactionId : transactionId;
+    const blockNumber: number | undefined =
+      bodyBlockNumber === null || bodyBlockNumber === undefined
+        ? readBlockNumberHeader(response)
+        : isBlockNumber(bodyBlockNumber)
+          ? bodyBlockNumber
+          : undefined;
     return new SubmittedTransaction({
       method,
       uniqueKey,
-      transactionId: transactionId === undefined || transactionId === '' ? null : transactionId,
-      result: data?.['result'],
+      transactionId:
+        resolvedTransactionId === undefined || resolvedTransactionId === ''
+          ? null
+          : resolvedTransactionId,
+      blockNumber: blockNumber ?? null,
+      result: data['result'],
       dexBackendBaseUrl: this.dexBackendBaseUrl,
       httpRequestor: this.requestor,
-      chainCallTimeoutMs: this.chainCallTimeoutMs,
+      requestTimeoutMs: this.chainCallTimeoutMs,
+      ...(options?.positionConfirmation === undefined
+        ? {}
+        : { positionConfirmation: options.positionConfirmation }),
     });
-  }
-
-  /** Execute an unsigned GalaChainDex read and unwrap its `Data` payload. */
-  public async chainRead<T>(method: string, dto: unknown): Promise<T> {
-    const url = `${this.gatewayBaseUrl}${this.dexContractBasePath}/${method}`;
-    const response = await this.requestor(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(dto),
-    });
-    const body = await readBody(response);
-    if (!response.ok) throw gatewayError(response, body, url);
-
-    const envelope = asRecord(body);
-    const nestedError = getObjectProperty(body, 'error');
-    const errorKey =
-      getStringProperty(envelope, 'ErrorKey') ?? getStringProperty(nestedError, 'ErrorKey');
-    const message =
-      getStringProperty(envelope, 'Message') ?? getStringProperty(nestedError, 'Message');
-    const status = envelope?.['Status'];
-    if (status === 0 || (errorKey !== undefined && message !== undefined)) {
-      throw GSwapSDKError.fromChainError(
-        errorKey ?? 'CHAIN_ERROR',
-        message ?? 'Chain read failed',
-        {
-          status: response.status,
-          body,
-          url,
-        },
-      );
-    }
-    if (status !== 1) {
-      throw new GSwapSDKError('Unexpected chain read response.', 'INVALID_CHAIN_RESPONSE', {
-        status: response.status,
-        body,
-        url,
-      });
-    }
-
-    return (envelope?.['Data'] ?? envelope?.['data']) as T;
-  }
-
-  /** Fetch every page from a cursor-based chain read. */
-  public async pageAll<T>(method: string, dto: Record<string, unknown> = {}): Promise<T[]> {
-    const values: T[] = [];
-    let bookmark: string | undefined;
-    do {
-      const requestDto = bookmark === undefined ? dto : { ...dto, bookmark };
-      const page = await this.chainRead<unknown>(method, requestDto);
-      const pageObject = asRecord(page);
-      const results = Array.isArray(page)
-        ? page
-        : Array.isArray(pageObject?.['results'])
-          ? pageObject['results']
-          : [];
-      values.push(...(results as T[]));
-      const next = pageObject?.['nextPageBookmark'];
-      bookmark = typeof next === 'string' && next !== '' ? next : undefined;
-    } while (bookmark !== undefined);
-    return values;
   }
 
   /** Expose the requestor for sibling read services that share this gateway transport. */
@@ -151,12 +143,21 @@ export class ChainGateway {
   }
 }
 
-async function readBody(response: HTTPResponse): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    return parseJson(await response.text());
-  }
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/$/u, '');
+}
+
+function invalidGatewayResponse(
+  response: HTTPResponse,
+  body: unknown,
+  url: string,
+  message: string,
+): GSwapSDKError {
+  return new GSwapSDKError(message, 'INVALID_GATEWAY_RESPONSE', {
+    status: response.status,
+    body,
+    url,
+  });
 }
 
 function gatewayError(response: HTTPResponse, body: unknown, url: string): GSwapSDKError {
@@ -199,10 +200,31 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/$/u, '');
+function isBlockNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
-function normalizePath(value: string): string {
-  return `/${value.replace(/^\//u, '').replace(/\/$/u, '')}`;
+function readHeader(response: HTTPResponse, name: string): string | undefined {
+  const headers = response.headers;
+  if (headers === undefined) return undefined;
+  if (hasHeaderGetter(headers)) {
+    const value = headers.get(name);
+    return value === null || value === '' ? undefined : value;
+  }
+  const record = headers;
+  const value = Object.entries(record).find(([key]) => key.toLowerCase() === name)?.[1];
+  return value === undefined || value === '' ? undefined : value;
+}
+
+function hasHeaderGetter(
+  headers: NonNullable<HTTPResponse['headers']>,
+): headers is { get(name: string): string | null } {
+  return 'get' in headers && typeof headers.get === 'function';
+}
+
+function readBlockNumberHeader(response: HTTPResponse): number | undefined {
+  const value = readHeader(response, 'x-block-number');
+  if (value === undefined) return undefined;
+  const blockNumber = Number(value);
+  return isBlockNumber(blockNumber) ? blockNumber : undefined;
 }
